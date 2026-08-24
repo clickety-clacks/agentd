@@ -6,6 +6,7 @@ AGENTD_UID=$(id -u)
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$AGENTD_UID}
 AGENTD_CODEX=$(command -v codex)
 AGENTD_CLAUDE=$(command -v claude)
+AGENTD_STRACE=$(command -v strace)
 AGENTD_UNIT_SOURCE="$AGENTD_REPO_ROOT/packaging/systemd/agentd.service"
 AGENTD_BINARY_TARGET="$HOME/.local/bin/agentd"
 AGENTD_UNIT_TARGET="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agentd.service"
@@ -21,9 +22,10 @@ AGENTD_TOOL_UNITS=(
   agentd-smoke-codex-2.service
   agentd-smoke-codex-3.service
   agentd-smoke-claude.service
+  agentd-smoke-agentd-trace.service
 )
 
-for AGENTD_REQUIRED in cargo jq rg systemctl systemd-run journalctl ss tail; do
+for AGENTD_REQUIRED in cargo jq rg systemctl systemd-run journalctl ss strace tail; do
   command -v "$AGENTD_REQUIRED" >/dev/null
 done
 test -n "${XDG_RUNTIME_DIR:-}"
@@ -64,6 +66,14 @@ systemctl --user daemon-reload
 systemctl --user enable --now agentd.service
 systemctl --user is-enabled agentd.service >"$AGENTD_EVIDENCE/service-enabled.txt"
 systemctl --user is-active agentd.service >"$AGENTD_EVIDENCE/service-active.txt"
+systemctl --user show agentd.service --property=ExecStart --value --no-pager \
+  >"$AGENTD_EVIDENCE/exec-start.txt"
+rg -F "path=$AGENTD_BINARY_TARGET" "$AGENTD_EVIDENCE/exec-start.txt" >/dev/null
+rg -F "argv[]=$AGENTD_BINARY_TARGET daemon ;" "$AGENTD_EVIDENCE/exec-start.txt" >/dev/null
+if rg -q -- '--socket|agentd\.sock' "$AGENTD_EVIDENCE/exec-start.txt"; then
+  echo "installed ExecStart contains a socket-path argument" >&2
+  exit 1
+fi
 test "$(stat -c '%a' "$XDG_RUNTIME_DIR/agentd.sock")" = 600
 
 "$AGENTD_BINARY_TARGET" watch --json >"$AGENTD_EVIDENCE/watch.ndjson" \
@@ -195,6 +205,55 @@ if rg -q "pid=$AGENTD_DAEMON_PID" \
   exit 1
 fi
 rg -q "agentd.sock" "$AGENTD_EVIDENCE/unix-listeners.txt"
+
+systemctl --user stop agentd.service
+AGENTD_TRACE_STOP_DEADLINE=$(( $(date +%s%3N) + 5000 ))
+while test -e "$XDG_RUNTIME_DIR/agentd.sock"; do
+  if test "$(date +%s%3N)" -gt "$AGENTD_TRACE_STOP_DEADLINE"; then
+    echo "agentd socket survived trace-phase service stop" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+systemd-run --user --unit=agentd-smoke-agentd-trace.service --collect \
+  --property=Type=simple \
+  "$AGENTD_STRACE" -f -tt -e trace=network,file \
+  -o "$AGENTD_EVIDENCE/network-trace.log" "$AGENTD_BINARY_TARGET" daemon >/dev/null
+AGENTD_TRACE_START_DEADLINE=$(( $(date +%s%3N) + 5000 ))
+while ! test -S "$XDG_RUNTIME_DIR/agentd.sock"; do
+  if test "$(date +%s%3N)" -gt "$AGENTD_TRACE_START_DEADLINE"; then
+    echo "traced installed daemon did not create its socket" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+AGENTD_TRACE_SCAN_START=$(date +%s%3N)
+sleep 0.35
+"$AGENTD_BINARY_TARGET" activity --pid "$AGENTD_ACTIVITY_PID" --state idle
+"$AGENTD_BINARY_TARGET" list --json >"$AGENTD_EVIDENCE/network-trace-activity.json"
+jq -e --argjson pid "$AGENTD_ACTIVITY_PID" \
+  '.agents[] | select(.id.pid == $pid and .activity.state == "idle" and .activity.source == "hook")' \
+  "$AGENTD_EVIDENCE/network-trace-activity.json" >/dev/null
+printf 'scan_window_start_unix_ms=%s\nactivity_pid=%s\nactivity_state=idle\n' \
+  "$AGENTD_TRACE_SCAN_START" "$AGENTD_ACTIVITY_PID" \
+  >"$AGENTD_EVIDENCE/network-trace-window.txt"
+systemctl --user stop agentd-smoke-agentd-trace.service
+rg -q '/proc' "$AGENTD_EVIDENCE/network-trace.log"
+rg -q 'socket\(AF_UNIX' "$AGENTD_EVIDENCE/network-trace.log"
+if rg -q 'socket\(AF_INET6?|connect\([^\n]*sa_family=AF_INET6?' \
+  "$AGENTD_EVIDENCE/network-trace.log"; then
+  echo "dynamic trace found an IPv4, IPv6, or outbound network syscall" >&2
+  exit 1
+fi
+systemctl --user start agentd.service
+AGENTD_TRACE_RESTART_DEADLINE=$(( $(date +%s%3N) + 5000 ))
+while ! test -S "$XDG_RUNTIME_DIR/agentd.sock"; do
+  if test "$(date +%s%3N)" -gt "$AGENTD_TRACE_RESTART_DEADLINE"; then
+    echo "agentd service did not recover after the trace phase" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
 
 journalctl --user -u agentd.service --since "5 minutes ago" --no-pager \
   >"$AGENTD_EVIDENCE/agentd-journal.txt"

@@ -103,11 +103,13 @@ cargo test --test integration
 scripts/real-smoke.sh
 ```
 
-The real smoke requires authenticated `codex` and `claude` commands, a working
-systemd user manager, and provider access. It starts three Codex processes and
-one Claude process in one dedicated directory, captures their real procfs
-fixtures, checks hookless discovery and activity enrichment, and tears down the
-processes and service. It writes its evidence directory path on success.
+The real smoke requires authenticated `codex` and `claude` commands, `strace`,
+a working systemd user manager, and provider access. It starts three Codex
+processes and one Claude process in one dedicated directory. It captures their
+real procfs fixtures, checks hookless discovery and activity enrichment,
+records the expanded installed service command, and dynamically traces the
+installed daemon's local-only transport. It tears down the processes and
+service. It writes its evidence directory path on success.
 
 [The verification map](docs/verification.md) links each acceptance case to its
 automated or real-host proof and lists the real-smoke evidence files.

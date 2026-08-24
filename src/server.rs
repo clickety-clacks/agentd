@@ -1,6 +1,6 @@
 use crate::procfs::ProcfsScanner;
 use crate::protocol::{AckFrame, ErrorCode, ErrorFrame, Request, error_message, parse_request};
-use crate::state::{ActivityError, StateStore, encode_frame};
+use crate::state::{ActivityError, StateStore, Subscription, encode_frame};
 use crate::{Clock, SystemClock};
 use std::fs;
 use std::io::{self, Read, Write};
@@ -217,20 +217,7 @@ fn serve_connection(
     };
     match request {
         Request::Snapshot => stream.write_all(store.snapshot_frame().as_slice()),
-        Request::Subscribe => {
-            let subscription = store.subscribe();
-            if stream.write_all(subscription.initial.as_slice()).is_err() {
-                subscription.slot.close();
-                return Ok(());
-            }
-            while let Some(frame) = subscription.slot.take() {
-                if stream.write_all(frame.as_slice()).is_err() {
-                    subscription.slot.close();
-                    break;
-                }
-            }
-            Ok(())
-        }
+        Request::Subscribe => serve_subscription(&mut stream, store.subscribe()),
         Request::Activity { agent, state } => {
             match store.apply_activity(agent, state, clock.as_ref()) {
                 Ok(ack) => stream.write_all(&encode_frame(&AckFrame {
@@ -244,6 +231,26 @@ fn serve_connection(
             }
         }
     }
+}
+
+fn serve_subscription(stream: &mut UnixStream, subscription: Subscription) -> io::Result<()> {
+    let Subscription { initial, slot } = subscription;
+    let initial_result = write_owned_frame(stream, initial);
+    if initial_result.is_err() {
+        slot.close();
+        return Ok(());
+    }
+    while let Some(frame) = slot.take() {
+        if stream.write_all(frame.as_slice()).is_err() {
+            slot.close();
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn write_owned_frame<W: Write>(writer: &mut W, frame: Arc<Vec<u8>>) -> io::Result<()> {
+    writer.write_all(frame.as_slice())
 }
 
 fn read_request(stream: &mut UnixStream) -> Result<Vec<u8>, ErrorCode> {
@@ -291,5 +298,28 @@ fn configure_send_buffer(stream: &UnixStream) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Weak;
+
+    #[test]
+    fn owned_initial_frame_is_released_when_its_write_completes() {
+        let retained_current = Arc::new(b"initial\n".to_vec());
+        let initial_lifetime: Weak<Vec<u8>> = Arc::downgrade(&retained_current);
+        let subscriber_initial = retained_current.clone();
+        assert_eq!(initial_lifetime.strong_count(), 2);
+
+        let mut written = Vec::new();
+        write_owned_frame(&mut written, subscriber_initial).unwrap();
+        assert_eq!(written, b"initial\n");
+        assert_eq!(
+            initial_lifetime.strong_count(),
+            1,
+            "subscriber retained the already-sent initial frame"
+        );
     }
 }
