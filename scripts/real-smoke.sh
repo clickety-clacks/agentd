@@ -140,7 +140,12 @@ done <"$AGENTD_FIXTURES/pids"
 AGENTD_CAPTURED_PROCFS_DIR="$AGENTD_FIXTURES" \
   cargo test --test captured_procfs -- --ignored >"$AGENTD_EVIDENCE/fixture-replay.log" 2>&1
 
-AGENTD_ACTIVITY_PID=$(head -1 "$AGENTD_FIXTURES/pids")
+AGENTD_ACTIVITY_PID=$(jq -r --arg cwd "$AGENTD_SHARED_CWD" '
+  [.agents[] |
+    select(.cwd.state == "known" and .cwd.value == $cwd and .harness == "codex") |
+    .id.pid] | min // empty
+' "$AGENTD_EVIDENCE/four-agents.json")
+test -n "$AGENTD_ACTIVITY_PID"
 "$AGENTD_BINARY_TARGET" activity --pid "$AGENTD_ACTIVITY_PID" --state active
 AGENTD_ACTIVITY_DEADLINE=$(( $(date +%s%3N) + 2000 ))
 while :; do
