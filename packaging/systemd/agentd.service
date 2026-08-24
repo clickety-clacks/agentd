@@ -1,0 +1,10 @@
+[Unit]
+Description=Truthful local coding-agent registry
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/agentd daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
