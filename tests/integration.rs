@@ -251,6 +251,21 @@ fn real_procfs_roster_stream_activity_and_exit_deadline() {
         attention.reason,
         agentd::model::SnapshotReason::ActivityChanged
     );
+    let attention_frame = request(&daemon.socket, b"{\"version\":1,\"op\":\"snapshot\"}\n");
+    let attention_json: Value = serde_json::from_slice(&attention_frame).unwrap();
+    let attention_agent = attention_json["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| {
+            agent["id"]["pid"].as_u64() == Some(u64::from(target.id.pid))
+                && agent["id"]["startTimeTicks"].as_u64() == Some(target.id.start_time_ticks)
+        })
+        .unwrap();
+    assert_eq!(
+        attention_agent["activity"]["state"].as_str(),
+        Some("needs_attention")
+    );
 
     for agent in matching {
         let result = unsafe { libc::kill(agent.id.pid as libc::pid_t, libc::SIGTERM) };
