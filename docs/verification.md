@@ -31,6 +31,21 @@ and a systemd user manager.
 | A14 | The README defines the format, static-analysis, unit, integration, and real-smoke commands. The real smoke records the commit, command, socket path, instance IDs, identities, deadline measurements, logs, and teardown. |
 | A15 | Injected-view and cycle unit tests cover changed parent IDs, finite repeated-PID traversal, typed `process_raced` issues, retained unknown identities, and omitted new identities. |
 
+## Version 1.1 amendment
+
+The v1.1 amendment preserves every base gate and adds these proofs:
+
+| Acceptance | Proof |
+| --- | --- |
+| A1 | Library tests run install and uninstall twice against Claude and Codex fixtures with unrelated root values, events, groups, handlers, and ordered arrays. They prove exact-one canonical declarations after install, byte identity on the second operation, exact-owned removal after an executable move, preserved unrelated order, retained hook files and root `hooks` objects, and byte-identical Codex `config.toml`. The no-follow regression proves that a symlink target is refused without changing its referent. |
+| A2 | After independent review, one real Gibson tmux acceptance follows the release README on the unchanged candidate. It records the exact product and spec commits, README lines, Claude and Codex versions, Codex feature output, tmux sessions, process identities, install output, hook-file hashes, `active`/`needs_attention`/`idle` frames, socket-unavailable diagnostics and elapsed times, repeated uninstall hashes, Codex trust ownership, and teardown. It retains no hook payload or credential. |
+
+Unit and integration regressions also prove the closed `needs_attention` wire and
+CLI value, exact Claude and Codex event mappings, same-harness ancestor collapse
+through nested and mixed-harness trees, payload-discarding typed fail-open output,
+the 750 ms acceptance bound, Codex hooks-feature gating, unverified-version warning,
+restart-only install guidance, and no Codex resolution during uninstall.
+
 The real smoke writes under `target/agentd-smoke/<UTC-run-id>/`. Its key files
 are `commit.txt`, `command.txt`, `socket-path.txt`, `exec-start.txt`, `instance-ids.txt`,
 `four-agents.json`, `watch.ndjson`, `fixtures/`, `fixture-replay.log`,

@@ -230,6 +230,28 @@ fn real_procfs_roster_stream_activity_and_exit_deadline() {
         agentd::model::SnapshotReason::ActivityChanged
     );
 
+    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args([
+            "activity",
+            "--pid",
+            &target.id.pid.to_string(),
+            "--state",
+            "needs_attention",
+        ])
+        .env("XDG_RUNTIME_DIR", &runtime.0)
+        .output()
+        .unwrap();
+    assert_silent_success(output);
+    let attention = wait_for_snapshot(&mut reader, |snapshot| {
+        snapshot.agents.iter().any(|agent| {
+            agent.id == target.id && agent.activity.state == ActivityState::NeedsAttention
+        })
+    });
+    assert_eq!(
+        attention.reason,
+        agentd::model::SnapshotReason::ActivityChanged
+    );
+
     for agent in matching {
         let result = unsafe { libc::kill(agent.id.pid as libc::pid_t, libc::SIGTERM) };
         assert_eq!(result, 0);
@@ -264,10 +286,7 @@ fn stale_socket_is_replaced_but_live_listener_is_preserved() {
     let stale_path = stale_runtime.0.join("agentd.sock");
     let stale = UnixListener::bind(&stale_path).unwrap();
     drop(stale);
-    assert_eq!(
-        UnixStream::connect(&stale_path).unwrap_err().kind(),
-        std::io::ErrorKind::ConnectionRefused
-    );
+    wait_for_connection_refused(&stale_path);
     let daemon = Daemon::start(&stale_runtime.0);
     daemon.stop();
 
@@ -284,6 +303,22 @@ fn stale_socket_is_replaced_but_live_listener_is_preserved() {
     assert_eq!(fs::symlink_metadata(&live_path).unwrap().ino(), live_inode);
     assert!(String::from_utf8_lossy(&output.stderr).contains("live listener already owns"));
     drop(listener);
+}
+
+fn wait_for_connection_refused(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match UnixStream::connect(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => return,
+            Ok(stream) => drop(stream),
+            Err(error) => panic!("unexpected stale-socket probe error: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stale listener remained connectable after its owner closed"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
 }
 
 #[test]
@@ -316,6 +351,163 @@ fn captured_real_procfs_fixtures_replay_parser_fields() {
         );
         assert!(Path::new(&process.cwd).is_absolute());
     }
+}
+
+#[test]
+fn hook_adapter_discards_payload_and_fails_open_with_a_typed_diagnostic() {
+    let started = Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args([
+            "hook",
+            "--integration",
+            "agentd-v1.1",
+            "--harness",
+            "claude",
+            "--event",
+            "Notification",
+        ])
+        .env_remove("XDG_RUNTIME_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"PRIVATE_PROMPT_AND_TOOL_INPUT")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "hook did not fail open: {output:?}"
+    );
+    assert!(started.elapsed() < Duration::from_millis(750));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(diagnostic, "agentd hook: ancestry_unresolved\n");
+    assert!(!diagnostic.contains("PRIVATE_PROMPT_AND_TOOL_INPUT"));
+
+    let invalid = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args([
+            "hook",
+            "--integration",
+            "agentd-v1.1",
+            "--harness",
+            "codex",
+            "--event",
+            "Notification",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(invalid.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(invalid.stderr).unwrap(),
+        "agentd hook: invalid_hook_event\n"
+    );
+}
+
+#[test]
+fn integration_cli_gates_codex_and_names_restart_only_activation() {
+    let root = TestDir::new("integrate-cli");
+    let commands = root.0.join("commands");
+    let claude = root.0.join("claude");
+    let codex = root.0.join("codex");
+    fs::create_dir(&commands).unwrap();
+    fs::create_dir(&claude).unwrap();
+    fs::create_dir(&codex).unwrap();
+    let fake_codex = commands.join("codex");
+    fs::write(
+        &fake_codex,
+        b"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.150.0'; exit 0; fi\nif [ \"$1 $2\" = \"features list\" ]; then echo 'hooks stable true'; exit 0; fi\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        commands.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let trust = codex.join("config.toml");
+    let trust_bytes = b"[hooks.state]\ntrusted_hash = \"codex-owned\"\n";
+    fs::write(&trust, trust_bytes).unwrap();
+
+    let claude_install = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["integrate", "install", "claude"])
+        .env("CLAUDE_CONFIG_DIR", &claude)
+        .output()
+        .unwrap();
+    assert!(claude_install.status.success(), "{claude_install:?}");
+    let claude_output = String::from_utf8(claude_install.stdout).unwrap();
+    assert!(claude_output.contains("claude --continue"));
+    assert!(claude_output.contains("claude --resume"));
+    assert!(claude_output.contains("activation=restart_only"));
+
+    let codex_install = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["integrate", "install", "codex"])
+        .env("CODEX_HOME", &codex)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(codex_install.status.success(), "{codex_install:?}");
+    let codex_output = String::from_utf8(codex_install.stdout).unwrap();
+    assert!(codex_output.contains("codex resume"));
+    assert!(codex_output.contains("trust=next_interactive_startup_review"));
+    assert!(codex_output.contains("warning=unverified_codex_version"));
+    assert_eq!(fs::read(&trust).unwrap(), trust_bytes);
+
+    let installed = fs::read(codex.join("hooks.json")).unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["integrate", "install", "codex"])
+        .env("CODEX_HOME", &codex)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(second.status.success(), "{second:?}");
+    assert!(
+        String::from_utf8(second.stdout)
+            .unwrap()
+            .contains("result=unchanged")
+    );
+    assert_eq!(fs::read(codex.join("hooks.json")).unwrap(), installed);
+
+    let uninstall = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["integrate", "uninstall", "codex"])
+        .env("CODEX_HOME", &codex)
+        .env("PATH", "/nonexistent")
+        .output()
+        .unwrap();
+    assert!(uninstall.status.success(), "{uninstall:?}");
+    assert_eq!(fs::read(&trust).unwrap(), trust_bytes);
+    let hooks: Value =
+        serde_json::from_slice(&fs::read(codex.join("hooks.json")).unwrap()).unwrap();
+    assert!(hooks["hooks"].as_object().unwrap().is_empty());
+
+    fs::write(
+        &fake_codex,
+        b"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.149.1'; exit 0; fi\nif [ \"$1 $2\" = \"features list\" ]; then echo 'hooks stable false'; exit 0; fi\nexit 1\n",
+    )
+    .unwrap();
+    let before_rejected_install = fs::read(codex.join("hooks.json")).unwrap();
+    let rejected = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["integrate", "install", "codex"])
+        .env("CODEX_HOME", &codex)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(rejected.stderr).unwrap(),
+        "agentd integrate: unsupported_codex_hooks\n"
+    );
+    assert_eq!(
+        fs::read(codex.join("hooks.json")).unwrap(),
+        before_rejected_install
+    );
 }
 
 fn request(path: &Path, bytes: &[u8]) -> Vec<u8> {

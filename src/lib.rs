@@ -1,4 +1,6 @@
 pub mod cli;
+pub mod hook;
+pub mod integration;
 pub mod model;
 pub mod procfs;
 pub mod protocol;

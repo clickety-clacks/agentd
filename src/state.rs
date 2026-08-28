@@ -204,7 +204,10 @@ impl StateStore {
         state: ActivityState,
         clock: &dyn Clock,
     ) -> Result<ActivityAck, ActivityError> {
-        debug_assert!(matches!(state, ActivityState::Active | ActivityState::Idle));
+        debug_assert!(matches!(
+            state,
+            ActivityState::Active | ActivityState::Idle | ActivityState::NeedsAttention
+        ));
         let mut inner = self.inner.lock().expect("state lock poisoned");
         let current = inner
             .current

@@ -44,15 +44,7 @@ pub struct ErrorFrame {
 }
 
 pub fn parse_request(input: &[u8]) -> Result<Request, ErrorCode> {
-    let mut duplicate_check = serde_json::Deserializer::from_slice(input);
-    NoDuplicateKeys
-        .deserialize(&mut duplicate_check)
-        .map_err(|_| ErrorCode::MalformedRequest)?;
-    duplicate_check
-        .end()
-        .map_err(|_| ErrorCode::MalformedRequest)?;
-
-    let value: Value = serde_json::from_slice(input).map_err(|_| ErrorCode::MalformedRequest)?;
+    let value = parse_json_value(input).map_err(|_| ErrorCode::MalformedRequest)?;
     let object = value.as_object().ok_or(ErrorCode::MalformedRequest)?;
     let version = object
         .get("version")
@@ -73,6 +65,18 @@ pub fn parse_request(input: &[u8]) -> Result<Request, ErrorCode> {
         _ if exact_keys(object.keys(), &["op", "version"]) => Err(ErrorCode::UnknownOperation),
         _ => Err(ErrorCode::MalformedRequest),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JsonParseError;
+
+pub fn parse_json_value(input: &[u8]) -> Result<Value, JsonParseError> {
+    let mut duplicate_check = serde_json::Deserializer::from_slice(input);
+    NoDuplicateKeys
+        .deserialize(&mut duplicate_check)
+        .map_err(|_| JsonParseError)?;
+    duplicate_check.end().map_err(|_| JsonParseError)?;
+    serde_json::from_slice(input).map_err(|_| JsonParseError)
 }
 
 fn parse_activity(object: &serde_json::Map<String, Value>) -> Result<Request, ErrorCode> {
@@ -100,6 +104,7 @@ fn parse_activity(object: &serde_json::Map<String, Value>) -> Result<Request, Er
     let state = match object.get("state").and_then(Value::as_str) {
         Some("active") => ActivityState::Active,
         Some("idle") => ActivityState::Idle,
+        Some("needs_attention") => ActivityState::NeedsAttention,
         _ => return Err(ErrorCode::InvalidActivity),
     };
     Ok(Request::Activity {
@@ -123,7 +128,7 @@ pub fn error_message(code: ErrorCode) -> &'static str {
         ErrorCode::UnknownOperation => "unknown operation",
         ErrorCode::MalformedRequest => "malformed request",
         ErrorCode::RequestTooLarge => "request exceeds 65536 bytes",
-        ErrorCode::InvalidActivity => "activity state must be active or idle",
+        ErrorCode::InvalidActivity => "activity state must be active, idle, or needs_attention",
         ErrorCode::UnknownAgent => "agent identity is not present",
     }
 }
@@ -151,6 +156,7 @@ pub fn human_snapshot(snapshot: &Snapshot) -> String {
         let activity = match agent.activity.state {
             ActivityState::Active => "active",
             ActivityState::Idle => "idle",
+            ActivityState::NeedsAttention => "needs_attention",
             ActivityState::Unknown => "unknown",
         };
         output.push_str(&format!(
@@ -290,6 +296,15 @@ mod tests {
                 br#"{"version":1,"op":"activity","agent":{"pid":7,"startTimeTicks":9},"state":"active"}"#
             ),
             Ok(Request::Activity { .. })
+        ));
+        assert!(matches!(
+            parse_request(
+                br#"{"version":1,"op":"activity","agent":{"pid":7,"startTimeTicks":9},"state":"needs_attention"}"#
+            ),
+            Ok(Request::Activity {
+                state: ActivityState::NeedsAttention,
+                ..
+            })
         ));
     }
 

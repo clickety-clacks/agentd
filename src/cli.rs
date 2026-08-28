@@ -31,8 +31,22 @@ pub fn run(arguments: Vec<OsString>) -> Result<(), String> {
         {
             activity(pid, state)
         }
+        [command, integration_flag, integration, harness_flag, harness, event_flag, event]
+            if command == "hook"
+                && integration_flag == "--integration"
+                && integration == "agentd-v1.1"
+                && harness_flag == "--harness"
+                && event_flag == "--event" =>
+        {
+            crate::hook::run(harness, event)
+        }
+        [command, action, harness]
+            if command == "integrate" && matches!(action.as_str(), "install" | "uninstall") =>
+        {
+            crate::integration::run(action, harness)
+        }
         _ => Err(
-            "agentd usage failed: expected daemon | list [--json] | watch [--json] | activity --pid <positive-integer> --state active|idle"
+            "agentd usage failed: expected daemon | list [--json] | watch [--json] | activity --pid <positive-integer> --state active|idle|needs_attention | hook --integration agentd-v1.1 --harness <claude|codex> --event <event> | integrate <install|uninstall> <claude|codex>"
                 .to_owned(),
         ),
     }
@@ -95,8 +109,11 @@ fn activity(pid: &str, state: &str) -> Result<(), String> {
     let state = match state {
         "active" => ActivityState::Active,
         "idle" => ActivityState::Idle,
+        "needs_attention" => ActivityState::NeedsAttention,
         _ => {
-            return Err("agentd activity failed: state must be active or idle".to_owned());
+            return Err(
+                "agentd activity failed: state must be active, idle, or needs_attention".to_owned(),
+            );
         }
     };
     let stat_path = format!("/proc/{pid}/stat");
@@ -105,11 +122,7 @@ fn activity(pid: &str, state: &str) -> Result<(), String> {
     let start_time_ticks = parse_stat(&stat, pid)
         .map_err(|error| format!("agentd activity failed: parse {stat_path}: {error}"))?
         .start_time_ticks;
-    let state_name = match state {
-        ActivityState::Active => "active",
-        ActivityState::Idle => "idle",
-        ActivityState::Unknown => unreachable!(),
-    };
+    let state_name = state.as_str();
     let request = format!(
         "{{\"version\":1,\"op\":\"activity\",\"agent\":{{\"pid\":{pid},\"startTimeTicks\":{start_time_ticks}}},\"state\":\"{state_name}\"}}\n"
     );

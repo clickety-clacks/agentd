@@ -160,7 +160,19 @@ impl Cwd {
 pub enum ActivityState {
     Active,
     Idle,
+    NeedsAttention,
     Unknown,
+}
+
+impl ActivityState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Idle => "idle",
+            Self::NeedsAttention => "needs_attention",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

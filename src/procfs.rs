@@ -61,6 +61,12 @@ enum RootResolution {
     Raced,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HookResolutionError {
+    AncestryUnresolved,
+    ProcessIdentityChanged,
+}
+
 impl ProcfsScanner {
     pub fn system() -> Self {
         Self::new(PathBuf::from("/proc"), unsafe { libc::geteuid() as u32 })
@@ -75,6 +81,65 @@ impl ProcfsScanner {
             view,
             effective_uid,
         }
+    }
+
+    pub fn resolve_hook_root(
+        &self,
+        start_pid: u32,
+        harness: Harness,
+    ) -> Result<AgentId, HookResolutionError> {
+        let mut visited = HashSet::new();
+        let mut pid = start_pid;
+        let mut matching_candidates = Vec::new();
+
+        while pid != 0 {
+            if !visited.insert(pid) {
+                return Err(HookResolutionError::AncestryUnresolved);
+            }
+            let first = self
+                .read_stat(pid)
+                .map_err(|_| HookResolutionError::AncestryUnresolved)?;
+            let parent_pid = first.parent_pid;
+
+            if let Some(candidate_harness) = live_harness(&first) {
+                let effective_uid = self
+                    .read_effective_uid(pid)
+                    .map_err(|_| HookResolutionError::AncestryUnresolved)?;
+                if effective_uid == self.effective_uid {
+                    let second = self
+                        .read_stat(pid)
+                        .map_err(|_| HookResolutionError::ProcessIdentityChanged)?;
+                    if second.start_time_ticks != first.start_time_ticks
+                        || live_harness(&second) != Some(candidate_harness)
+                    {
+                        return Err(HookResolutionError::ProcessIdentityChanged);
+                    }
+                    if second.parent_pid != first.parent_pid {
+                        return Err(HookResolutionError::AncestryUnresolved);
+                    }
+                    if candidate_harness == harness {
+                        matching_candidates.push(second);
+                    }
+                }
+            }
+            pid = parent_pid;
+        }
+
+        let root = matching_candidates
+            .last()
+            .ok_or(HookResolutionError::AncestryUnresolved)?;
+        let final_read = self
+            .read_stat(root.pid)
+            .map_err(|_| HookResolutionError::ProcessIdentityChanged)?;
+        if final_read.start_time_ticks != root.start_time_ticks
+            || live_harness(&final_read) != Some(harness)
+        {
+            return Err(HookResolutionError::ProcessIdentityChanged);
+        }
+        Ok(AgentId {
+            pid: root.pid,
+            start_time_ticks: root.start_time_ticks,
+        })
     }
 
     pub fn scan(&self, previous: Option<&Snapshot>, clock: &dyn Clock) -> ScanProposal {
@@ -510,6 +575,45 @@ mod tests {
                 .map(|agent| agent.id.pid)
                 .collect::<Vec<_>>(),
             vec![13, 10, 15]
+        );
+    }
+
+    #[test]
+    fn hook_resolver_maps_nested_same_harness_to_highest_root() {
+        let procfs = TestProcfs::new("hook-root");
+        procfs.write_process(410, "claude", 0, 4_100, 1000);
+        procfs.write_process(420, "bash", 410, 4_200, 1000);
+        procfs.write_process(430, "claude", 420, 4_300, 1000);
+        procfs.write_process(440, "bash", 430, 4_400, 1000);
+        assert_eq!(
+            procfs.scanner().resolve_hook_root(440, Harness::Claude),
+            Ok(AgentId {
+                pid: 410,
+                start_time_ticks: 4_100,
+            })
+        );
+    }
+
+    #[test]
+    fn hook_resolver_crosses_different_harness_candidates() {
+        let procfs = TestProcfs::new("hook-cross-harness");
+        procfs.write_process(510, "codex", 0, 5_100, 1000);
+        procfs.write_process(520, "claude", 510, 5_200, 1000);
+        procfs.write_process(530, "codex", 520, 5_300, 1000);
+        procfs.write_process(540, "bash", 530, 5_400, 1000);
+        assert_eq!(
+            procfs.scanner().resolve_hook_root(540, Harness::Codex),
+            Ok(AgentId {
+                pid: 510,
+                start_time_ticks: 5_100,
+            })
+        );
+        assert_eq!(
+            procfs.scanner().resolve_hook_root(540, Harness::Claude),
+            Ok(AgentId {
+                pid: 520,
+                start_time_ticks: 5_200,
+            })
         );
     }
 
