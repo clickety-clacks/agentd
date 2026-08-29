@@ -662,7 +662,8 @@ fn print_result(
     )
     .expect("not-removed report serialization cannot fail");
     let mut line = format!(
-        "agentd integrate: harness={} action={} result={result_name} target={} not_removed={not_removed}",
+        "agentd integrate: agentd_version={} harness={} action={} result={result_name} target={} not_removed={not_removed}",
+        env!("CARGO_PKG_VERSION"),
         harness.as_str(),
         action.as_str(),
         target.display()

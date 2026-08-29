@@ -426,6 +426,17 @@ fn hook_adapter_discards_payload_and_fails_open_with_a_typed_diagnostic() {
 }
 
 #[test]
+fn version_reports_the_package_version() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"agentd 0.2.0\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn integration_cli_gates_codex_and_names_restart_only_activation() {
     let root = TestDir::new("integrate-cli");
     let commands = root.0.join("commands");
@@ -457,9 +468,26 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
         .unwrap();
     assert!(claude_install.status.success(), "{claude_install:?}");
     let claude_output = String::from_utf8(claude_install.stdout).unwrap();
-    assert!(claude_output.contains("claude --continue"));
-    assert!(claude_output.contains("claude --resume"));
-    assert!(claude_output.contains("activation=restart_only"));
+    assert_eq!(
+        claude_output,
+        format!(
+            "agentd integrate: agentd_version=0.2.0 harness=claude action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"claude --continue|claude --resume\"\n",
+            claude.join("settings.json").display()
+        )
+    );
+    let claude_uninstall = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["integrate", "uninstall", "claude"])
+        .env("CLAUDE_CONFIG_DIR", &claude)
+        .output()
+        .unwrap();
+    assert!(claude_uninstall.status.success(), "{claude_uninstall:?}");
+    assert_eq!(
+        String::from_utf8(claude_uninstall.stdout).unwrap(),
+        format!(
+            "agentd integrate: agentd_version=0.2.0 harness=claude action=uninstall result=changed target={} not_removed=[]\n",
+            claude.join("settings.json").display()
+        )
+    );
 
     let codex_install = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .args(["integrate", "install", "codex"])
@@ -469,9 +497,13 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
         .unwrap();
     assert!(codex_install.status.success(), "{codex_install:?}");
     let codex_output = String::from_utf8(codex_install.stdout).unwrap();
-    assert!(codex_output.contains("codex resume"));
-    assert!(codex_output.contains("trust=next_interactive_startup_review"));
-    assert!(codex_output.contains("warning=unverified_codex_version"));
+    assert_eq!(
+        codex_output,
+        format!(
+            "agentd integrate: agentd_version=0.2.0 harness=codex action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
+            codex.join("hooks.json").display()
+        )
+    );
     assert_eq!(fs::read(&trust).unwrap(), trust_bytes);
 
     let installed = fs::read(codex.join("hooks.json")).unwrap();
@@ -482,10 +514,12 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
         .output()
         .unwrap();
     assert!(second.status.success(), "{second:?}");
-    assert!(
-        String::from_utf8(second.stdout)
-            .unwrap()
-            .contains("result=unchanged")
+    assert_eq!(
+        String::from_utf8(second.stdout).unwrap(),
+        format!(
+            "agentd integrate: agentd_version=0.2.0 harness=codex action=install result=unchanged target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
+            codex.join("hooks.json").display()
+        )
     );
     assert_eq!(fs::read(codex.join("hooks.json")).unwrap(), installed);
 
@@ -496,6 +530,13 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
         .output()
         .unwrap();
     assert!(uninstall.status.success(), "{uninstall:?}");
+    assert_eq!(
+        String::from_utf8(uninstall.stdout).unwrap(),
+        format!(
+            "agentd integrate: agentd_version=0.2.0 harness=codex action=uninstall result=changed target={} not_removed=[]\n",
+            codex.join("hooks.json").display()
+        )
+    );
     assert_eq!(fs::read(&trust).unwrap(), trust_bytes);
     let hooks: Value =
         serde_json::from_slice(&fs::read(codex.join("hooks.json")).unwrap()).unwrap();

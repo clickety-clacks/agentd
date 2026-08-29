@@ -5,6 +5,8 @@ Codex and Claude coding-agent processes. It observes process existence through
 `/proc`. Optional activity messages enrich an existing record but never create
 or preserve one.
 
+The current Agentd product release is v0.2.0.
+
 The daemon keeps one atomic in-memory snapshot. Local clients read or subscribe
 to complete snapshots through `$XDG_RUNTIME_DIR/agentd.sock`. Process identity
 is the pair of PID and Linux process start-time ticks. Unknown presence, working
@@ -19,6 +21,14 @@ cargo build --release
 ```
 
 The build produces `target/release/agentd`.
+
+Print the Agentd product version:
+
+```sh
+agentd --version
+```
+
+The v0.2.0 release prints `agentd 0.2.0`.
 
 ## Install the user service
 
@@ -260,8 +270,9 @@ records the expanded installed service command, and dynamically traces the
 installed daemon's local-only transport. It tears down the processes and
 service. It writes its evidence directory path on success.
 
-After independent review of an unchanged v1.1 candidate, the release acceptance
-also follows both integration procedures above in real Gibson tmux sessions. It
+After independent review of an unchanged v0.2.0 release candidate, the release
+acceptance also follows both integration procedures above in real Gibson tmux
+sessions. It
 captures the replacement process identities and the `active`, `needs_attention`,
 and `idle` sequence for each harness. It also checks fail-open behavior with the
 socket unavailable, before-and-after hook-file hashes, Codex feature output and

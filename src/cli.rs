@@ -20,6 +20,10 @@ pub fn run(arguments: Vec<OsString>) -> Result<(), String> {
         })
         .collect::<Result<_, _>>()?;
     match arguments.as_slice() {
+        [flag] if flag == "--version" => {
+            println!("agentd {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         [command] if command == "daemon" => server::run_daemon()
             .map_err(|cause| format!("agentd daemon failed: {cause}")),
         [command] if command == "list" => list(false),
@@ -46,7 +50,7 @@ pub fn run(arguments: Vec<OsString>) -> Result<(), String> {
             crate::integration::run(action, harness)
         }
         _ => Err(
-            "agentd usage failed: expected daemon | list [--json] | watch [--json] | activity --pid <positive-integer> --state active|idle|needs_attention | hook --integration agentd-v1.1 --harness <claude|codex> --event <event> | integrate <install|uninstall> <claude|codex>"
+            "agentd usage failed: expected --version | daemon | list [--json] | watch [--json] | activity --pid <positive-integer> --state active|idle|needs_attention | hook --integration agentd-v1.1 --harness <claude|codex> --event <event> | integrate <install|uninstall> <claude|codex>"
                 .to_owned(),
         ),
     }
