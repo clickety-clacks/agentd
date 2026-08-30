@@ -1,6 +1,6 @@
 use crate::procfs::ProcfsScanner;
 use crate::protocol::{AckFrame, ErrorCode, ErrorFrame, Request, error_message, parse_request};
-use crate::state::{ActivityError, StateStore, Subscription, encode_frame};
+use crate::state::{ActivityError, NameError, StateStore, Subscription, encode_frame};
 use crate::{Clock, SystemClock};
 use std::fs;
 use std::io::{self, Read, Write};
@@ -230,6 +230,17 @@ fn serve_connection(
                 }
             }
         }
+        Request::Name { agent, name } => match store.apply_name(agent, name) {
+            Ok(ack) => stream.write_all(&encode_frame(&AckFrame {
+                frame_type: "ack",
+                instance_id: &ack.instance_id,
+                revision: ack.revision,
+            })),
+            Err(NameError::UnknownAgent) => write_error(&mut stream, ErrorCode::UnknownAgent),
+            Err(NameError::StoreUnavailable) => {
+                write_error(&mut stream, ErrorCode::NameStoreUnavailable)
+            }
+        },
     }
 }
 

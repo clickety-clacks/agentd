@@ -1,4 +1,5 @@
 use crate::model::{ActivityState, AgentId, CwdState, PresenceState, ScanIssue, Snapshot};
+use crate::names::validate_display_name;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserializer, Serialize};
 use serde_json::Value;
@@ -13,6 +14,10 @@ pub enum Request {
         agent: AgentId,
         state: ActivityState,
     },
+    Name {
+        agent: AgentId,
+        name: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -23,7 +28,9 @@ pub enum ErrorCode {
     MalformedRequest,
     RequestTooLarge,
     InvalidActivity,
+    InvalidName,
     UnknownAgent,
+    NameStoreUnavailable,
 }
 
 #[derive(Serialize)]
@@ -61,10 +68,25 @@ pub fn parse_request(input: &[u8]) -> Result<Request, ErrorCode> {
         "snapshot" if exact_keys(object.keys(), &["op", "version"]) => Ok(Request::Snapshot),
         "subscribe" if exact_keys(object.keys(), &["op", "version"]) => Ok(Request::Subscribe),
         "activity" => parse_activity(object),
+        "name" => parse_name(object),
         "snapshot" | "subscribe" => Err(ErrorCode::MalformedRequest),
         _ if exact_keys(object.keys(), &["op", "version"]) => Err(ErrorCode::UnknownOperation),
         _ => Err(ErrorCode::MalformedRequest),
     }
+}
+
+fn parse_name(object: &serde_json::Map<String, Value>) -> Result<Request, ErrorCode> {
+    if !exact_keys(object.keys(), &["agent", "name", "op", "version"]) {
+        return Err(ErrorCode::MalformedRequest);
+    }
+    let agent = parse_agent(object)?;
+    let name = match object.get("name") {
+        Some(Value::Null) => None,
+        Some(Value::String(name)) if validate_display_name(name) => Some(name.clone()),
+        Some(Value::String(_)) => return Err(ErrorCode::InvalidName),
+        _ => return Err(ErrorCode::MalformedRequest),
+    };
+    Ok(Request::Name { agent, name })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,6 +105,17 @@ fn parse_activity(object: &serde_json::Map<String, Value>) -> Result<Request, Er
     if !exact_keys(object.keys(), &["agent", "op", "state", "version"]) {
         return Err(ErrorCode::MalformedRequest);
     }
+    let agent = parse_agent(object)?;
+    let state = match object.get("state").and_then(Value::as_str) {
+        Some("active") => ActivityState::Active,
+        Some("idle") => ActivityState::Idle,
+        Some("needs_attention") => ActivityState::NeedsAttention,
+        _ => return Err(ErrorCode::InvalidActivity),
+    };
+    Ok(Request::Activity { agent, state })
+}
+
+fn parse_agent(object: &serde_json::Map<String, Value>) -> Result<AgentId, ErrorCode> {
     let agent = object
         .get("agent")
         .and_then(Value::as_object)
@@ -101,18 +134,9 @@ fn parse_activity(object: &serde_json::Map<String, Value>) -> Result<Request, Er
         .and_then(Value::as_u64)
         .filter(|value| *value > 0)
         .ok_or(ErrorCode::MalformedRequest)?;
-    let state = match object.get("state").and_then(Value::as_str) {
-        Some("active") => ActivityState::Active,
-        Some("idle") => ActivityState::Idle,
-        Some("needs_attention") => ActivityState::NeedsAttention,
-        _ => return Err(ErrorCode::InvalidActivity),
-    };
-    Ok(Request::Activity {
-        agent: AgentId {
-            pid,
-            start_time_ticks,
-        },
-        state,
+    Ok(AgentId {
+        pid,
+        start_time_ticks,
     })
 }
 
@@ -129,7 +153,9 @@ pub fn error_message(code: ErrorCode) -> &'static str {
         ErrorCode::MalformedRequest => "malformed request",
         ErrorCode::RequestTooLarge => "request exceeds 65536 bytes",
         ErrorCode::InvalidActivity => "activity state must be active, idle, or needs_attention",
+        ErrorCode::InvalidName => "display name must be 1 to 64 UTF-8 bytes without controls",
         ErrorCode::UnknownAgent => "agent identity is not present",
+        ErrorCode::NameStoreUnavailable => "name store is unavailable",
     }
 }
 
@@ -159,10 +185,27 @@ pub fn human_snapshot(snapshot: &Snapshot) -> String {
             ActivityState::NeedsAttention => "needs_attention",
             ActivityState::Unknown => "unknown",
         };
+        let tmux = agent.tmux.as_ref().map(|location| {
+            format!(
+                "{}:{}.{}:{}",
+                location.session, location.window_index, location.window_name, location.pane_id
+            )
+        });
+        let cwd_base = match agent.cwd.state {
+            CwdState::Known => agent.cwd.value.as_deref().and_then(cwd_base),
+            CwdState::Unknown => None,
+        };
         output.push_str(&format!(
-            "agent pid={} startTimeTicks={} harness={} presence={} cwd={} activity={}\n",
+            "agent name={} tmux={} cwdBase={} pid={} startTimeTicks={} startedAtUnixMs={} tty={} harness={} presence={} cwd={} activity={}\n",
+            json_optional(agent.name.as_deref()),
+            json_optional(tmux.as_deref()),
+            json_optional(cwd_base.as_deref()),
             agent.id.pid,
             agent.id.start_time_ticks,
+            agent
+                .started_at_unix_ms
+                .map_or_else(|| "null".to_owned(), |value| value.to_string()),
+            json_optional(agent.tty.as_deref()),
             agent.harness.as_str(),
             presence,
             cwd,
@@ -170,6 +213,23 @@ pub fn human_snapshot(snapshot: &Snapshot) -> String {
         ));
     }
     output
+}
+
+fn cwd_base(value: &str) -> Option<String> {
+    if value == "/" {
+        Some("/".into())
+    } else {
+        std::path::Path::new(value)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+    }
+}
+
+fn json_optional(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "null".to_owned(),
+        |value| serde_json::to_string(value).expect("serializing display value cannot fail"),
+    )
 }
 
 fn human_issue(issue: &ScanIssue) -> String {
@@ -297,6 +357,24 @@ mod tests {
             ),
             Ok(Request::Activity { .. })
         ));
+        assert_eq!(
+            parse_request(
+                br#"{"version":1,"op":"name","agent":{"pid":7,"startTimeTicks":9},"name":"Agentd spec"}"#
+            ),
+            Ok(Request::Name {
+                agent: AgentId {
+                    pid: 7,
+                    start_time_ticks: 9
+                },
+                name: Some("Agentd spec".into())
+            })
+        );
+        assert!(matches!(
+            parse_request(
+                br#"{"version":1,"op":"name","agent":{"pid":7,"startTimeTicks":9},"name":null}"#
+            ),
+            Ok(Request::Name { name: None, .. })
+        ));
         assert!(matches!(
             parse_request(
                 br#"{"version":1,"op":"activity","agent":{"pid":7,"startTimeTicks":9},"state":"needs_attention"}"#
@@ -333,6 +411,12 @@ mod tests {
             Err(ErrorCode::UnsupportedVersion)
         );
         assert_eq!(
+            parse_request(
+                br#"{"version":1,"op":"name","agent":{"pid":7,"startTimeTicks":9},"name":"line\nbreak"}"#
+            ),
+            Err(ErrorCode::InvalidName)
+        );
+        assert_eq!(
             parse_request(br#"{"version":1,"op":"history"}"#),
             Err(ErrorCode::UnknownOperation)
         );
@@ -366,6 +450,61 @@ mod tests {
         assert_eq!(
             human_snapshot(&snapshot),
             "instance=0123456789abcdef0123456789abcdef revision=1 scan=degraded agents=0\nissue pid=none field=proc cause=proc_unavailable\n"
+        );
+    }
+
+    #[test]
+    fn v02_agent_frames_decode_new_fields_as_null() {
+        let agent: crate::model::AgentRecord = serde_json::from_str(
+            r#"{"id":{"pid":7,"startTimeTicks":9},"harness":"codex","detectedBy":"proc_comm","presence":{"state":"present","cause":null},"cwd":{"state":"known","value":"/work","cause":null},"activity":{"state":"unknown","source":"none","observedAtUnixMs":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(agent.tty, None);
+        assert_eq!(agent.tmux, None);
+        assert_eq!(agent.name, None);
+        assert_eq!(agent.started_at_unix_ms, None);
+    }
+
+    #[test]
+    fn human_agent_line_leads_with_identity_fields_and_keeps_raw_cwd() {
+        use crate::model::{
+            Activity, AgentRecord, Cwd, DetectedBy, Harness, Presence, TmuxLocation,
+        };
+        let snapshot = Snapshot {
+            frame_type: SnapshotType::Snapshot,
+            reason: SnapshotReason::Initial,
+            schema: SnapshotSchema::V1,
+            instance_id: "0123456789abcdef0123456789abcdef".into(),
+            revision: 1,
+            observed_at_unix_ms: 1,
+            scan: Scan {
+                state: ScanState::Complete,
+                issues: Vec::new(),
+            },
+            agents: vec![AgentRecord {
+                id: AgentId {
+                    pid: 7,
+                    start_time_ticks: 9,
+                },
+                harness: Harness::Codex,
+                detected_by: DetectedBy::ProcComm,
+                presence: Presence::present(),
+                cwd: Cwd::known("/home/mike/work/agentd".into()),
+                activity: Activity::unknown(),
+                tty: Some("pts/13".into()),
+                tmux: Some(TmuxLocation {
+                    session: "agents".into(),
+                    window_index: 2,
+                    window_name: "spec".into(),
+                    pane_id: "%7".into(),
+                }),
+                name: Some("Agentd spec".into()),
+                started_at_unix_ms: Some(1_700_000_002_500),
+            }],
+        };
+        assert_eq!(
+            human_snapshot(&snapshot),
+            "instance=0123456789abcdef0123456789abcdef revision=1 scan=complete agents=1\nagent name=\"Agentd spec\" tmux=\"agents:2.spec:%7\" cwdBase=\"agentd\" pid=7 startTimeTicks=9 startedAtUnixMs=1700000002500 tty=\"pts/13\" harness=codex presence=present cwd=/home/mike/work/agentd activity=unknown\n"
         );
     }
 }

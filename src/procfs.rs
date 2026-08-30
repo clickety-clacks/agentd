@@ -1,9 +1,10 @@
 use crate::Clock;
 use crate::model::{
     Activity, AgentId, AgentRecord, Cwd, DetectedBy, Harness, IssueCause, IssueField, Presence,
-    Scan, ScanIssue, ScanProposal, ScanState, Snapshot,
+    ProcessLiveness, Scan, ScanIssue, ScanProposal, ScanState, Snapshot,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use crate::tmux::{NoTmux, SystemTmux, TmuxSource};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use std::sync::Arc;
 pub struct ProcfsScanner {
     view: Arc<dyn ProcfsView>,
     effective_uid: u32,
+    tmux: Arc<dyn TmuxSource>,
 }
 
 pub trait ProcfsView: Send + Sync {
@@ -20,6 +22,18 @@ pub trait ProcfsView: Send + Sync {
     fn read_stat(&self, pid: u32) -> io::Result<String>;
     fn read_status(&self, pid: u32) -> io::Result<String>;
     fn read_cwd(&self, pid: u32) -> io::Result<PathBuf>;
+    fn read_system_stat(&self) -> io::Result<String> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "system procfs stat unavailable",
+        ))
+    }
+    fn ticks_per_second(&self) -> io::Result<u64> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "clock tick rate unavailable",
+        ))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +57,18 @@ impl ProcfsView for FilesystemProcfs {
     fn read_cwd(&self, pid: u32) -> io::Result<PathBuf> {
         fs::read_link(self.root.join(pid.to_string()).join("cwd"))
     }
+
+    fn read_system_stat(&self) -> io::Result<String> {
+        fs::read_to_string(self.root.join("stat"))
+    }
+
+    fn ticks_per_second(&self) -> io::Result<u64> {
+        let value = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        u64::try_from(value)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| io::Error::other("invalid clock tick rate"))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +77,7 @@ pub struct StatRecord {
     pub parent_pid: u32,
     pub comm: String,
     pub state: char,
+    pub tty_nr: i32,
     pub start_time_ticks: u64,
 }
 
@@ -69,7 +96,13 @@ pub enum HookResolutionError {
 
 impl ProcfsScanner {
     pub fn system() -> Self {
-        Self::new(PathBuf::from("/proc"), unsafe { libc::geteuid() as u32 })
+        Self {
+            view: Arc::new(FilesystemProcfs {
+                root: PathBuf::from("/proc"),
+            }),
+            effective_uid: unsafe { libc::geteuid() as u32 },
+            tmux: Arc::new(SystemTmux),
+        }
     }
 
     pub fn new(root: PathBuf, effective_uid: u32) -> Self {
@@ -80,6 +113,20 @@ impl ProcfsScanner {
         Self {
             view,
             effective_uid,
+            tmux: Arc::new(NoTmux),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_view_with_tmux(
+        view: Arc<dyn ProcfsView>,
+        effective_uid: u32,
+        tmux: Arc<dyn TmuxSource>,
+    ) -> Self {
+        Self {
+            view,
+            effective_uid,
+            tmux,
         }
     }
 
@@ -172,9 +219,23 @@ impl ProcfsScanner {
                         }],
                     },
                     agents,
+                    process_liveness: None,
                 };
             }
         };
+
+        let tmux_index = self.tmux.index();
+        let started_at_inputs = self
+            .view
+            .read_system_stat()
+            .and_then(|content| parse_boot_time(&content))
+            .and_then(|boot_time| {
+                self.view
+                    .ticks_per_second()
+                    .map(|ticks_per_second| (boot_time, ticks_per_second))
+            })
+            .ok();
+        let mut enumerated_pids: BTreeSet<u32> = pids.iter().copied().collect();
 
         let mut first_reads = BTreeMap::new();
         let mut unknown = HashMap::<AgentId, IssueCause>::new();
@@ -186,7 +247,9 @@ impl ProcfsScanner {
                 Err(error) => {
                     let cause = read_cause(&error);
                     issues.push(issue(pid, IssueField::Stat, cause));
-                    if error.kind() != io::ErrorKind::NotFound {
+                    if error.kind() == io::ErrorKind::NotFound {
+                        enumerated_pids.remove(&pid);
+                    } else {
                         for old in previous_agents.iter().filter(|agent| agent.id.pid == pid) {
                             unknown.entry(old.id).or_insert(cause);
                         }
@@ -195,7 +258,7 @@ impl ProcfsScanner {
             }
         }
 
-        let mut validated = BTreeMap::<u32, (StatRecord, Harness)>::new();
+        let mut validated = BTreeMap::<u32, (StatRecord, Harness, Option<String>)>::new();
         for first in first_reads.values() {
             let Some(harness) = live_harness(first) else {
                 continue;
@@ -225,7 +288,9 @@ impl ProcfsScanner {
                 Err(error) => {
                     let cause = read_cause(&error);
                     issues.push(issue(first.pid, IssueField::Stat, cause));
-                    if error.kind() != io::ErrorKind::NotFound && previous_by_id.contains_key(&id) {
+                    if error.kind() == io::ErrorKind::NotFound {
+                        enumerated_pids.remove(&first.pid);
+                    } else if previous_by_id.contains_key(&id) {
                         unknown.entry(id).or_insert(cause);
                     }
                     continue;
@@ -247,11 +312,14 @@ impl ProcfsScanner {
                 }
                 continue;
             }
-            validated.insert(first.pid, (second, harness));
+            let tty = (second.tty_nr == first.tty_nr)
+                .then(|| canonical_tty(second.tty_nr))
+                .flatten();
+            validated.insert(first.pid, (second, harness, tty));
         }
 
         let mut agents = Vec::new();
-        for (pid, (candidate, harness)) in &validated {
+        for (pid, (candidate, harness, tty)) in &validated {
             let id = AgentId {
                 pid: *pid,
                 start_time_ticks: candidate.start_time_ticks,
@@ -290,6 +358,21 @@ impl ProcfsScanner {
                         presence: Presence::present(),
                         cwd,
                         activity: Activity::unknown(),
+                        tty: tty.clone(),
+                        tmux: tty
+                            .as_ref()
+                            .and_then(|canonical| tmux_index.get(canonical))
+                            .cloned(),
+                        name: None,
+                        started_at_unix_ms: started_at_inputs.and_then(
+                            |(boot_time, ticks_per_second)| {
+                                started_at_unix_ms(
+                                    boot_time,
+                                    candidate.start_time_ticks,
+                                    ticks_per_second,
+                                )
+                            },
+                        ),
                     });
                 }
             }
@@ -323,6 +406,13 @@ impl ProcfsScanner {
                 issues,
             },
             agents,
+            process_liveness: Some(ProcessLiveness {
+                enumerated_pids,
+                start_time_ticks: first_reads
+                    .values()
+                    .map(|stat| (stat.pid, stat.start_time_ticks))
+                    .collect(),
+            }),
         }
     }
 
@@ -358,6 +448,7 @@ pub fn parse_stat(content: &str, expected_pid: u32) -> io::Result<StatRecord> {
         return Err(invalid_data());
     }
     let parent_pid = fields[1].parse().map_err(|_| invalid_data())?;
+    let tty_nr = fields[4].parse().map_err(|_| invalid_data())?;
     let start_time_ticks = fields[19].parse().map_err(|_| invalid_data())?;
     if start_time_ticks == 0 {
         return Err(invalid_data());
@@ -367,6 +458,7 @@ pub fn parse_stat(content: &str, expected_pid: u32) -> io::Result<StatRecord> {
         parent_pid,
         comm,
         state,
+        tty_nr,
         start_time_ticks,
     })
 }
@@ -418,7 +510,7 @@ fn resolve_root(
     candidate: &StatRecord,
     harness: Harness,
     first_reads: &BTreeMap<u32, StatRecord>,
-    validated: &BTreeMap<u32, (StatRecord, Harness)>,
+    validated: &BTreeMap<u32, (StatRecord, Harness, Option<String>)>,
 ) -> RootResolution {
     let mut visited = HashSet::from([candidate.pid]);
     let mut parent_pid = candidate.parent_pid;
@@ -431,13 +523,60 @@ fn resolve_root(
         };
         if validated
             .get(&parent_pid)
-            .is_some_and(|(_, parent_harness)| *parent_harness == harness)
+            .is_some_and(|(_, parent_harness, _)| *parent_harness == harness)
         {
             return RootResolution::Child;
         }
         parent_pid = parent.parent_pid;
     }
     RootResolution::Root
+}
+
+pub fn canonical_tty(tty_nr: i32) -> Option<String> {
+    if tty_nr == 0 {
+        return None;
+    }
+    let bits = tty_nr as u32;
+    let major = (bits >> 8) & 0x0000_0fff;
+    let minor = (bits & 0x0000_00ff) | ((bits >> 12) & 0x000f_ff00);
+    if (136..=143).contains(&major) {
+        let index = (major - 136).checked_mul(256)?.checked_add(minor)?;
+        Some(format!("pts/{index}"))
+    } else {
+        Some(format!("dev/{major}:{minor}"))
+    }
+}
+
+pub fn parse_boot_time(content: &str) -> io::Result<u64> {
+    let mut values = content.lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        (fields.next() == Some("btime")).then(|| (fields.next(), fields.next()))
+    });
+    let (Some(value), None) = values.next().ok_or_else(invalid_data)? else {
+        return Err(invalid_data());
+    };
+    if values.next().is_some() {
+        return Err(invalid_data());
+    }
+    value.parse().map_err(|_| invalid_data())
+}
+
+pub fn started_at_unix_ms(
+    boot_time_unix_seconds: u64,
+    start_time_ticks: u64,
+    ticks_per_second: u64,
+) -> Option<u64> {
+    if ticks_per_second == 0 {
+        return None;
+    }
+    let result = (boot_time_unix_seconds as u128)
+        .checked_mul(1000)?
+        .checked_add(
+            (start_time_ticks as u128)
+                .checked_mul(1000)?
+                .checked_div(ticks_per_second as u128)?,
+        )?;
+    u64::try_from(result).ok()
 }
 
 fn issue(pid: u32, field: IssueField, cause: IssueCause) -> ScanIssue {
@@ -509,11 +648,23 @@ mod tests {
             start_time_ticks: u64,
             effective_uid: u32,
         ) {
+            self.write_process_with_tty(pid, comm, parent_pid, start_time_ticks, effective_uid, 0);
+        }
+
+        fn write_process_with_tty(
+            &self,
+            pid: u32,
+            comm: &str,
+            parent_pid: u32,
+            start_time_ticks: u64,
+            effective_uid: u32,
+            tty_nr: i32,
+        ) {
             let directory = self.0.join(pid.to_string());
             fs::create_dir_all(&directory).unwrap();
             fs::write(
                 directory.join("stat"),
-                synthetic_stat(pid, comm, parent_pid, start_time_ticks),
+                synthetic_stat_with_tty(pid, comm, parent_pid, start_time_ticks, tty_nr),
             )
             .unwrap();
             fs::write(
@@ -542,7 +693,89 @@ mod tests {
         assert_eq!(parsed.comm, "name with ) paren");
         assert_eq!(parsed.parent_pid, 7);
         assert_eq!(parsed.state, 'S');
+        assert_eq!(parsed.tty_nr, 0);
         assert_eq!(parsed.start_time_ticks, 99);
+    }
+
+    #[test]
+    fn tty_and_started_at_use_exact_linux_integer_rules() {
+        let stat = synthetic_stat_with_tty(42, "name with ) paren", 7, 250, 34_829);
+        let parsed = parse_stat(&stat, 42).unwrap();
+        assert_eq!(canonical_tty(parsed.tty_nr).as_deref(), Some("pts/13"));
+        assert_eq!(
+            started_at_unix_ms(1_700_000_000, parsed.start_time_ticks, 100),
+            Some(1_700_000_002_500)
+        );
+        assert_eq!(started_at_unix_ms(u64::MAX, 1, 100), None);
+        assert_eq!(started_at_unix_ms(1, 1, 0), None);
+        assert_eq!(
+            parse_boot_time("cpu 1\nbtime 1700000000\n").unwrap(),
+            1_700_000_000
+        );
+        assert!(parse_boot_time("btime 1\nbtime 2\n").is_err());
+    }
+
+    #[test]
+    fn scanner_builds_one_tmux_index_and_maps_only_matching_tty() {
+        struct CountingTmux {
+            calls: AtomicUsize,
+        }
+        impl TmuxSource for CountingTmux {
+            fn index(&self) -> crate::tmux::TmuxIndex {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                HashMap::from([(
+                    "pts/13".into(),
+                    crate::model::TmuxLocation {
+                        session: "agents".into(),
+                        window_index: 2,
+                        window_name: "spec".into(),
+                        pane_id: "%7".into(),
+                    },
+                )])
+            }
+        }
+
+        let procfs = TestProcfs::new("tmux-index");
+        procfs.write_process_with_tty(10, "codex", 0, 100, 1000, 34_829);
+        procfs.write_process(20, "claude", 0, 200, 1000);
+        let tmux = Arc::new(CountingTmux {
+            calls: AtomicUsize::new(0),
+        });
+        let scanner = ProcfsScanner::from_view_with_tmux(
+            Arc::new(FilesystemProcfs {
+                root: procfs.0.clone(),
+            }),
+            1000,
+            tmux.clone(),
+        );
+        let proposal = scanner.scan(None, &FixedClock(1));
+        assert_eq!(tmux.calls.load(Ordering::SeqCst), 1);
+        let codex = proposal
+            .agents
+            .iter()
+            .find(|agent| agent.id.pid == 10)
+            .unwrap();
+        assert_eq!(codex.tty.as_deref(), Some("pts/13"));
+        assert_eq!(codex.tmux.as_ref().unwrap().pane_id, "%7");
+        let claude = proposal
+            .agents
+            .iter()
+            .find(|agent| agent.id.pid == 20)
+            .unwrap();
+        assert_eq!(claude.tty, None);
+        assert_eq!(claude.tmux, None);
+    }
+
+    #[test]
+    fn tty_change_between_identity_reads_is_null_without_losing_presence() {
+        let view = Arc::new(TtyRaceView {
+            reads: AtomicUsize::new(0),
+        });
+        let proposal = ProcfsScanner::from_view(view, 1000).scan(None, &FixedClock(1));
+        assert_eq!(proposal.agents.len(), 1);
+        assert_eq!(proposal.agents[0].presence.state, PresenceState::Present);
+        assert_eq!(proposal.agents[0].tty, None);
+        assert_eq!(proposal.agents[0].tmux, None);
     }
 
     #[test]
@@ -763,6 +996,10 @@ mod tests {
                 presence: Presence::present(),
                 cwd: Cwd::known("/work".into()),
                 activity: Activity::unknown(),
+                tty: None,
+                tmux: None,
+                name: None,
+                started_at_unix_ms: None,
             }],
         };
         let retained_scan = scanner.scan(Some(&previous), &FixedClock(2));
@@ -807,6 +1044,35 @@ mod tests {
         reads: AtomicUsize,
     }
 
+    struct TtyRaceView {
+        reads: AtomicUsize,
+    }
+
+    impl ProcfsView for TtyRaceView {
+        fn enumerate_pids(&self) -> io::Result<Vec<u32>> {
+            Ok(vec![61])
+        }
+
+        fn read_stat(&self, pid: u32) -> io::Result<String> {
+            assert_eq!(pid, 61);
+            let tty = if self.reads.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                34_829
+            } else {
+                34_830
+            };
+            Ok(synthetic_stat_with_tty(61, "codex", 0, 610, tty))
+        }
+
+        fn read_status(&self, pid: u32) -> io::Result<String> {
+            assert_eq!(pid, 61);
+            Ok("Uid:\t1000\t1000\t1000\t1000\n".into())
+        }
+
+        fn read_cwd(&self, _pid: u32) -> io::Result<PathBuf> {
+            Ok(PathBuf::from("/work"))
+        }
+    }
+
     impl ProcfsView for ParentRaceView {
         fn enumerate_pids(&self) -> io::Result<Vec<u32>> {
             Ok(vec![60])
@@ -830,8 +1096,19 @@ mod tests {
     }
 
     fn synthetic_stat(pid: u32, comm: &str, parent_pid: u32, start: u64) -> String {
+        synthetic_stat_with_tty(pid, comm, parent_pid, start, 0)
+    }
+
+    fn synthetic_stat_with_tty(
+        pid: u32,
+        comm: &str,
+        parent_pid: u32,
+        start: u64,
+        tty_nr: i32,
+    ) -> String {
         let mut fields = vec!["S".to_owned(), parent_pid.to_string()];
         fields.extend(std::iter::repeat_n("0".to_owned(), 17));
+        fields[4] = tty_nr.to_string();
         fields.push(start.to_string());
         format!("{pid} ({comm}) {}\n", fields.join(" "))
     }

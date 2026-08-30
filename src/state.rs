@@ -1,8 +1,9 @@
 use crate::Clock;
 use crate::model::{
-    Activity, ActivityState, AgentId, AgentRecord, PresenceState, ScanProposal, Snapshot,
-    SnapshotReason, SnapshotSchema, SnapshotType,
+    Activity, ActivityState, AgentId, AgentRecord, PresenceState, ProcessLiveness, ScanProposal,
+    Snapshot, SnapshotReason, SnapshotSchema, SnapshotType,
 };
+use crate::names::{NameStore, NameStoreUnavailable};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{self, Read};
@@ -70,6 +71,12 @@ pub enum ActivityError {
     UnknownAgent,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NameError {
+    UnknownAgent,
+    StoreUnavailable,
+}
+
 pub struct StateStore {
     instance_id: String,
     inner: Mutex<StateInner>,
@@ -79,14 +86,23 @@ struct StateInner {
     current: Option<Arc<Snapshot>>,
     encoded: Option<Arc<Vec<u8>>>,
     subscribers: Vec<Weak<SubscriberSlot>>,
+    names: NameStore,
+    process_liveness: Option<ProcessLiveness>,
 }
 
 impl StateStore {
     pub fn new() -> io::Result<Self> {
-        Ok(Self::with_instance_id(random_instance_id()?))
+        Ok(Self::with_name_store(
+            random_instance_id()?,
+            NameStore::system(),
+        ))
     }
 
     pub fn with_instance_id(instance_id: String) -> Self {
+        Self::with_name_store(instance_id, NameStore::memory())
+    }
+
+    fn with_name_store(instance_id: String, names: NameStore) -> Self {
         assert!(
             instance_id.len() == 32
                 && instance_id
@@ -100,6 +116,8 @@ impl StateStore {
                 current: None,
                 encoded: None,
                 subscribers: Vec::new(),
+                names,
+                process_liveness: None,
             }),
         }
     }
@@ -141,6 +159,11 @@ impl StateStore {
         proposal.scan.issues.dedup();
 
         let mut inner = self.inner.lock().expect("state lock poisoned");
+        inner.names.cleanup(proposal.process_liveness.as_ref());
+        inner.process_liveness = proposal.process_liveness;
+        for proposed in &mut proposal.agents {
+            proposed.name = inner.names.name_for(proposed.id).map(str::to_owned);
+        }
         if let Some(current) = &inner.current {
             for proposed in &mut proposal.agents {
                 if let Some(existing) = current.agents.iter().find(|agent| agent.id == proposed.id)
@@ -249,6 +272,56 @@ impl StateStore {
         })
     }
 
+    pub fn apply_name(&self, id: AgentId, name: Option<String>) -> Result<ActivityAck, NameError> {
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        let current = inner
+            .current
+            .as_ref()
+            .expect("first scan must commit before name requests");
+        let Some(index) = current
+            .agents
+            .iter()
+            .position(|agent| agent.id == id && agent.presence.state == PresenceState::Present)
+        else {
+            return Err(NameError::UnknownAgent);
+        };
+        if current.agents[index].name == name {
+            return Ok(ActivityAck {
+                instance_id: self.instance_id.clone(),
+                revision: current.revision,
+            });
+        }
+
+        let liveness = inner.process_liveness.clone();
+        inner
+            .names
+            .replace(id, name.clone(), liveness.as_ref())
+            .map_err(|NameStoreUnavailable| NameError::StoreUnavailable)?;
+
+        let current = inner
+            .current
+            .as_ref()
+            .expect("first scan must commit before name requests");
+        let mut changed = current.as_ref().clone();
+        changed.revision = changed
+            .revision
+            .checked_add(1)
+            .expect("snapshot revision overflow");
+        changed.reason = SnapshotReason::RosterChanged;
+        changed.agents[index].name = name;
+        let revision = changed.revision;
+        let snapshot = Arc::new(changed);
+        let encoded = Arc::new(encode_frame(snapshot.as_ref()));
+        inner.current = Some(snapshot);
+        inner.encoded = Some(encoded.clone());
+        offer_to_subscribers(&mut inner.subscribers, encoded);
+
+        Ok(ActivityAck {
+            instance_id: self.instance_id.clone(),
+            revision,
+        })
+    }
+
     pub fn close_subscribers(&self) {
         let mut inner = self.inner.lock().expect("state lock poisoned");
         inner.subscribers.retain(|weak| {
@@ -269,6 +342,10 @@ struct NonActivityAgent<'a> {
     detected_by: crate::model::DetectedBy,
     presence: &'a crate::model::Presence,
     cwd: &'a crate::model::Cwd,
+    tty: &'a Option<String>,
+    tmux: &'a Option<crate::model::TmuxLocation>,
+    name: &'a Option<String>,
+    started_at_unix_ms: Option<u64>,
 }
 
 fn non_activity_agents(agents: &[AgentRecord]) -> Vec<NonActivityAgent<'_>> {
@@ -280,6 +357,10 @@ fn non_activity_agents(agents: &[AgentRecord]) -> Vec<NonActivityAgent<'_>> {
             detected_by: agent.detected_by,
             presence: &agent.presence,
             cwd: &agent.cwd,
+            tty: &agent.tty,
+            tmux: &agent.tmux,
+            name: &agent.name,
+            started_at_unix_ms: agent.started_at_unix_ms,
         })
         .collect()
 }
@@ -349,7 +430,12 @@ mod tests {
                 presence: Presence::present(),
                 cwd: Cwd::known("/work".into()),
                 activity: Activity::unknown(),
+                tty: None,
+                tmux: None,
+                name: None,
+                started_at_unix_ms: None,
             }],
+            process_liveness: None,
         }
     }
 
@@ -399,6 +485,57 @@ mod tests {
     }
 
     #[test]
+    fn name_set_noop_clear_and_stale_identity_use_the_atomic_seam() {
+        let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
+        store.commit_scan(proposal(10));
+        let id = AgentId {
+            pid: 7,
+            start_time_ticks: 11,
+        };
+        let set = store.apply_name(id, Some("Agentd spec".into())).unwrap();
+        assert_eq!(set.revision, 2);
+        let snapshot = store.current_snapshot().unwrap();
+        assert_eq!(snapshot.reason, SnapshotReason::RosterChanged);
+        assert_eq!(snapshot.agents[0].name.as_deref(), Some("Agentd spec"));
+
+        let same = store.apply_name(id, Some("Agentd spec".into())).unwrap();
+        assert_eq!(same.revision, 2);
+        let clear = store.apply_name(id, None).unwrap();
+        assert_eq!(clear.revision, 3);
+        assert_eq!(store.current_snapshot().unwrap().agents[0].name, None);
+        assert_eq!(store.apply_name(id, None).unwrap().revision, 3);
+        assert_eq!(
+            store.apply_name(
+                AgentId {
+                    pid: 7,
+                    start_time_ticks: 12,
+                },
+                Some("wrong".into())
+            ),
+            Err(NameError::UnknownAgent)
+        );
+    }
+
+    #[test]
+    fn scan_started_before_name_change_cannot_restore_an_old_name() {
+        let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
+        store.commit_scan(proposal(10));
+        let stale_proposal = proposal(20);
+        store
+            .apply_name(
+                AgentId {
+                    pid: 7,
+                    start_time_ticks: 11,
+                },
+                Some("current".into()),
+            )
+            .unwrap();
+        let after_scan = store.commit_scan(stale_proposal);
+        assert_eq!(after_scan.agents[0].name.as_deref(), Some("current"));
+        assert_eq!(after_scan.revision, 2);
+    }
+
+    #[test]
     fn removed_identity_cannot_be_resurrected_by_activity() {
         let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
         store.commit_scan(proposal(10));
@@ -413,6 +550,7 @@ mod tests {
                 issues: Vec::new(),
             },
             agents: Vec::new(),
+            process_liveness: None,
         });
         assert_eq!(
             store.apply_activity(id, ActivityState::Active, &FixedClock(30)),
@@ -447,6 +585,7 @@ mod tests {
                 ],
             },
             agents: Vec::new(),
+            process_liveness: None,
         });
         assert_eq!(snapshot.scan.issues[0].pid, None);
         assert_eq!(snapshot.scan.issues[1].field, crate::model::IssueField::Cwd);

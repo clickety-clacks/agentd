@@ -1,4 +1,5 @@
 use crate::model::{ActivityState, AgentId, Harness};
+use crate::names::validate_display_name;
 use crate::procfs::{HookResolutionError, ProcfsScanner};
 use crate::server;
 use serde_json::Value;
@@ -32,6 +33,7 @@ enum HookError {
     AncestryUnresolved,
     ProcessIdentityChanged,
     UnknownAgent,
+    NameStoreUnavailable,
     DeadlineExceeded,
 }
 
@@ -44,9 +46,20 @@ impl HookError {
             Self::AncestryUnresolved => "ancestry_unresolved",
             Self::ProcessIdentityChanged => "process_identity_changed",
             Self::UnknownAgent => "unknown_agent",
+            Self::NameStoreUnavailable => "name_store_unavailable",
             Self::DeadlineExceeded => "deadline_exceeded",
         }
     }
+}
+
+pub fn run_name(name: &str) -> Result<(), String> {
+    if !validate_display_name(name) {
+        return Err("agentd name: invalid_name".to_owned());
+    }
+    if let Err(error) = run_named(name.to_owned()) {
+        eprintln!("agentd name: {}", error.as_str());
+    }
+    Ok(())
 }
 
 pub fn run(harness: &str, event: &str) -> Result<(), String> {
@@ -97,6 +110,25 @@ fn run_mapped(harness: Harness, state: ActivityState) -> Result<(), HookError> {
         .map_err(|_| HookError::DeadlineExceeded)?
 }
 
+fn run_named(name: String) -> Result<(), HookError> {
+    let deadline = Instant::now() + TOTAL_DEADLINE;
+    drain_stdin(deadline)?;
+    check_deadline(deadline)?;
+    let parent_pid = unsafe { libc::getppid() };
+    let parent_pid = u32::try_from(parent_pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or(HookError::AncestryUnresolved)?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = resolve_and_submit_name(parent_pid, name, deadline);
+        let _ = sender.send(result);
+    });
+    receiver
+        .recv_timeout(remaining(deadline)?)
+        .map_err(|_| HookError::DeadlineExceeded)?
+}
+
 fn resolve_and_submit(
     parent_pid: u32,
     harness: Harness,
@@ -112,6 +144,21 @@ fn resolve_and_submit(
     check_deadline(deadline)?;
 
     submit_activity(id, state, deadline)
+}
+
+fn resolve_and_submit_name(
+    parent_pid: u32,
+    name: String,
+    deadline: Instant,
+) -> Result<(), HookError> {
+    let id = ProcfsScanner::system()
+        .resolve_hook_root(parent_pid, Harness::Claude)
+        .map_err(|error| match error {
+            HookResolutionError::AncestryUnresolved => HookError::AncestryUnresolved,
+            HookResolutionError::ProcessIdentityChanged => HookError::ProcessIdentityChanged,
+        })?;
+    check_deadline(deadline)?;
+    submit_name(id, &name, deadline)
 }
 
 fn drain_stdin(deadline: Instant) -> Result<(), HookError> {
@@ -163,6 +210,25 @@ fn submit_activity(id: AgentId, state: ActivityState, deadline: Instant) -> Resu
     parse_ack(&frame)
 }
 
+fn submit_name(id: AgentId, name: &str, deadline: Instant) -> Result<(), HookError> {
+    let path = server::socket_path().map_err(|_| HookError::RuntimeDirectoryUnavailable)?;
+    let mut stream = UnixStream::connect(path).map_err(|_| HookError::SocketUnavailable)?;
+    set_timeouts(&stream, deadline)?;
+    let request = serde_json::json!({
+        "version": 1,
+        "op": "name",
+        "agent": {"pid": id.pid, "startTimeTicks": id.start_time_ticks},
+        "name": name,
+    });
+    let mut request = serde_json::to_vec(&request).map_err(|_| HookError::ProtocolError)?;
+    request.push(b'\n');
+    stream
+        .write_all(&request)
+        .map_err(|error| io_error(error, deadline))?;
+    let frame = read_frame(&mut stream, deadline)?;
+    parse_ack(&frame)
+}
+
 fn read_frame(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>, HookError> {
     let mut frame = Vec::with_capacity(256);
     let mut chunk = [0_u8; 1024];
@@ -199,6 +265,11 @@ fn parse_ack(frame: &[u8]) -> Result<(), HookError> {
         }
         Some("error") if object.get("code").and_then(Value::as_str) == Some("unknown_agent") => {
             Err(HookError::UnknownAgent)
+        }
+        Some("error")
+            if object.get("code").and_then(Value::as_str) == Some("name_store_unavailable") =>
+        {
+            Err(HookError::NameStoreUnavailable)
         }
         _ => Err(HookError::ProtocolError),
     }

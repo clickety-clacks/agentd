@@ -217,6 +217,23 @@ pub struct AgentRecord {
     pub presence: Presence,
     pub cwd: Cwd,
     pub activity: Activity,
+    #[serde(default)]
+    pub tty: Option<String>,
+    #[serde(default)]
+    pub tmux: Option<TmuxLocation>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub started_at_unix_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TmuxLocation {
+    pub session: String,
+    pub window_index: u32,
+    pub window_name: String,
+    pub pane_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -279,6 +296,13 @@ pub struct ScanProposal {
     pub observed_at_unix_ms: u64,
     pub scan: Scan,
     pub agents: Vec<AgentRecord>,
+    pub process_liveness: Option<ProcessLiveness>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessLiveness {
+    pub enumerated_pids: std::collections::BTreeSet<u32>,
+    pub start_time_ticks: std::collections::BTreeMap<u32, u64>,
 }
 
 impl AgentRecord {

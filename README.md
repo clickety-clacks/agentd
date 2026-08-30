@@ -5,12 +5,13 @@ Codex and Claude coding-agent processes. It observes process existence through
 `/proc`. Optional activity messages enrich an existing record but never create
 or preserve one.
 
-The current Agentd product release is v0.2.0.
+The current Agentd product release is v0.3.0.
 
 The daemon keeps one atomic in-memory snapshot. Local clients read or subscribe
 to complete snapshots through `$XDG_RUNTIME_DIR/agentd.sock`. Process identity
 is the pair of PID and Linux process start-time ticks. Unknown presence, working
-directory, and activity values stay explicit.
+directory, activity, terminal, tmux location, display name, and process start
+time values stay explicit.
 
 ## Build
 
@@ -28,7 +29,7 @@ Print the Agentd product version:
 agentd --version
 ```
 
-The v0.2.0 release prints `agentd 0.2.0`.
+The v0.3.0 release prints `agentd 0.3.0`.
 
 ## Install the user service
 
@@ -74,6 +75,58 @@ agentd activity --pid 930481 --state needs_attention
 
 An activity command is silent when the daemon acknowledges it. The daemon
 rejects a PID that is absent, uncertain, or reused with a different start time.
+
+Set or clear a display name for the current exact process identity:
+
+```sh
+agentd name --pid 930481 "Agentd spec"
+agentd name --pid 930481 --clear
+```
+
+A successful name command is silent. A name is 1 through 64 UTF-8 bytes and
+contains no Unicode control character. Agentd preserves the accepted bytes. It
+binds the name to both PID and Linux start-time ticks, so PID reuse cannot inherit
+it. The name survives an Agentd restart in the same Linux boot while that exact
+process stays live.
+
+Agentd stores names in `$XDG_STATE_HOME/agentd/names.json` when
+`XDG_STATE_HOME` is an absolute path. It uses
+`$HOME/.local/state/agentd/names.json` when `XDG_STATE_HOME` is unset. The state
+directory is mode `0700`, and the file is mode `0600`. Agentd refuses unsafe or
+malformed state for name mutation while roster service continues with null names.
+
+A user-authored Claude `SessionStart` hook can supply one constant name as an
+argument:
+
+```sh
+agentd name --from-claude-session-start "Review lane"
+```
+
+This optional command discards hook stdin without parsing it. It sends only the
+argument name and the exact mapped Claude root identity. Agentd does not install
+or remove this optional hook. The automatic Claude integration still owns only
+its four activity mappings.
+
+Each JSON agent record also includes:
+
+- `tty`: the controlling terminal from `/proc/<pid>/stat`, normalized as
+  `pts/<index>` or `dev/<major>:<minor>`, or null.
+- `tmux`: one best-effort per-scan mapping with `session`, `windowIndex`,
+  `windowName`, and `paneId`, or null. Agentd runs at most one bounded
+  `tmux list-panes` command per procfs scan. Missing, malformed, ambiguous, or
+  unavailable tmux data fails open and does not degrade the scan.
+- `name`: the exact eligible user-set display name, or null.
+- `startedAtUnixMs`: Linux boot time plus process start-time ticks, or null when
+  the integer conversion inputs are unavailable or invalid.
+
+The schema marker remains `agentd.snapshot.v1`. These four fields are additive
+and always present in v0.3 frames. A consumer that ignores unknown agent fields
+remains compatible. A v0.3 consumer treats their absence in a v0.2 frame as null.
+Strict consumers that reject unknown fields must upgrade.
+
+Human `agentd list` and `agentd watch` lines lead with JSON-encoded name, tmux
+location, and cwd basename. They retain the legacy raw full path or literal
+`unknown` in the trailing `cwd` field.
 
 ## Install harness activity integrations
 
@@ -270,7 +323,7 @@ records the expanded installed service command, and dynamically traces the
 installed daemon's local-only transport. It tears down the processes and
 service. It writes its evidence directory path on success.
 
-After independent review of an unchanged v0.2.0 release candidate, the release
+After independent review of an unchanged v0.3.0 release candidate, the release
 acceptance also follows both integration procedures above in real Gibson tmux
 sessions. It
 captures the replacement process identities and the `active`, `needs_attention`,
@@ -278,6 +331,12 @@ and `idle` sequence for each harness. It also checks fail-open behavior with the
 socket unavailable, before-and-after hook-file hashes, Codex feature output and
 trust ownership, repeated-uninstall byte identity, and complete teardown. The
 acceptance capture retains no hook payload or credential.
+
+The v0.3 acceptance additionally checks tmux and non-tmux records, exact name
+set/no-op/restart/clear/stale behavior, independent start-time arithmetic,
+missing-tmux fail-open behavior, additive JSON fields, human rendering, and
+absence of private prompt, command, environment, screen, and transcript
+sentinels on Gibson and Osanwe.
 
 [The verification map](docs/verification.md) links each acceptance case to its
 automated or real-host proof and lists the real-smoke evidence files.
@@ -287,5 +346,6 @@ automated or real-host proof and lists the real-smoke evidence files.
 Agentd does not provide remote or multi-host aggregation, a graphical or web
 interface, transcript handling, LLM calls of its own, agent steering, a plugin
 or provider framework, macOS support, or Windows support. It does not
-authenticate process vendors, discover other users' processes, persist a
-registry, replay events, infer progress, or turn elapsed time into activity.
+authenticate process vendors, discover other users' processes, replay events,
+infer progress, or turn elapsed time into activity. Its only persistent state is
+the bounded same-boot exact-identity display-name registry.

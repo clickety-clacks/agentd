@@ -46,6 +46,31 @@ through nested and mixed-harness trees, payload-discarding typed fail-open outpu
 the 750 ms acceptance bound, Codex hooks-feature gating, unverified-version warning,
 restart-only install guidance, and no Codex resolution during uninstall.
 
+## Version 0.3 display identity amendment
+
+The v0.3 unit suite proves the additive snapshot fields and v0.2 missing-field
+decode rule; signed procfs `tty_nr` parsing and two-read disagreement; exact
+boot-time/tick arithmetic and overflow; one reusable tmux index per scan;
+byte-length framing with delimiter and multibyte values; malformed, invalid UTF-8,
+semantic-control, absent, nonmatching, and ambiguous tmux cases; exact display-name
+validation; atomic name set/no-op/clear/stale mutation; scan/name interleaving;
+registry mode, schema, same-boot recovery, cleanup, and PID reuse; deterministic
+human rendering; and privacy-safe Claude SessionStart fail-open input.
+
+The Linux integration suite starts an isolated daemon and real procfs-discovered
+process. It proves all four JSON fields, exact name set and identical-set no-op,
+mode-`0600` persistence, same-boot daemon-restart retention with revision 1 and
+unknown activity, stale-identity refusal, clear and identical-clear no-op, and
+registry privacy. It does not replace the post-review real-host matrix.
+
+After exact-commit code review, the unchanged candidate runs the full v0.2 gates
+and a Gibson/Osanwe matrix. Each host records the candidate commit and binary
+hash, kernel, tmux version, boot ID, tick rate, instance IDs, and exact process
+identities. It proves tmux and non-tmux roots, independent timestamp arithmetic,
+name lifecycle, an isolated PATH-without-tmux daemon, restart behavior, retained
+socket/service contracts, private sentinel absence, and teardown. This repository
+stage does not install or release the candidate.
+
 The real smoke writes under `target/agentd-smoke/<UTC-run-id>/`. Its key files
 are `commit.txt`, `command.txt`, `socket-path.txt`, `exec-start.txt`, `instance-ids.txt`,
 `four-agents.json`, `watch.ndjson`, `fixtures/`, `fixture-replay.log`,

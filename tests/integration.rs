@@ -41,6 +41,7 @@ impl Daemon {
         let child = Command::new(env!("CARGO_BIN_EXE_agentd"))
             .arg("daemon")
             .env("XDG_RUNTIME_DIR", runtime)
+            .env("XDG_STATE_HOME", runtime.join("state"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -288,6 +289,7 @@ fn regular_file_at_socket_path_is_refused_without_removal() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .arg("daemon")
         .env("XDG_RUNTIME_DIR", &runtime.0)
+        .env("XDG_STATE_HOME", runtime.0.join("state"))
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -312,6 +314,7 @@ fn stale_socket_is_replaced_but_live_listener_is_preserved() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
         .arg("daemon")
         .env("XDG_RUNTIME_DIR", &live_runtime.0)
+        .env("XDG_STATE_HOME", live_runtime.0.join("state"))
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -423,6 +426,157 @@ fn hook_adapter_discards_payload_and_fails_open_with_a_typed_diagnostic() {
         String::from_utf8(invalid.stderr).unwrap(),
         "agentd hook: invalid_hook_event\n"
     );
+
+    let mut name = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["name", "--from-claude-session-start", "Review lane"])
+        .env_remove("XDG_RUNTIME_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    name.stdin
+        .take()
+        .unwrap()
+        .write_all(b"PRIVATE_SESSION_START_SENTINEL")
+        .unwrap();
+    let output = name.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "name hook did not fail open: {output:?}"
+    );
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(diagnostic, "agentd name: ancestry_unresolved\n");
+    assert!(!diagnostic.contains("PRIVATE_SESSION_START_SENTINEL"));
+}
+
+#[test]
+fn name_set_restart_clear_and_stale_identity_are_exact_and_persistent() {
+    let runtime = TestDir::new("name-runtime");
+    let cwd = TestDir::new("name-cwd");
+    let commands = TestDir::new("name-command");
+    symlink("/bin/sleep", commands.0.join("codex")).unwrap();
+    spawn_named(
+        &commands.0.join("codex"),
+        &cwd.0,
+        "DO_NOT_CAPTURE_NAME_SENTINEL",
+    );
+    let daemon = Daemon::start(&runtime.0);
+    let initial = wait_for_matching_agent(&daemon.socket, &cwd.0);
+    let agent = initial
+        .agents
+        .iter()
+        .find(|agent| {
+            agent.cwd.state == CwdState::Known
+                && agent.cwd.value.as_deref() == Some(cwd.0.to_string_lossy().as_ref())
+        })
+        .unwrap();
+    let id = agent.id;
+    let pid = id.pid;
+    assert!(agent.started_at_unix_ms.is_some());
+    assert_eq!(agent.name, None);
+    let initial_revision = initial.revision;
+
+    let set = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["name", "--pid", &pid.to_string(), "Agentd spec"])
+        .env("XDG_RUNTIME_DIR", &runtime.0)
+        .output()
+        .unwrap();
+    assert_silent_success(set);
+    let named: Snapshot = serde_json::from_slice(&request(
+        &daemon.socket,
+        b"{\"version\":1,\"op\":\"snapshot\"}\n",
+    ))
+    .unwrap();
+    assert_eq!(named.revision, initial_revision + 1);
+    assert_eq!(
+        named
+            .agents
+            .iter()
+            .find(|agent| agent.id == id)
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Agentd spec")
+    );
+
+    let identical = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["name", "--pid", &pid.to_string(), "Agentd spec"])
+        .env("XDG_RUNTIME_DIR", &runtime.0)
+        .output()
+        .unwrap();
+    assert_silent_success(identical);
+    let unchanged: Snapshot = serde_json::from_slice(&request(
+        &daemon.socket,
+        b"{\"version\":1,\"op\":\"snapshot\"}\n",
+    ))
+    .unwrap();
+    assert_eq!(unchanged.revision, named.revision);
+
+    let registry = runtime.0.join("state/agentd/names.json");
+    let registry_bytes = fs::read(&registry).unwrap();
+    assert_eq!(
+        fs::symlink_metadata(&registry)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert!(!String::from_utf8_lossy(&registry_bytes).contains("DO_NOT_CAPTURE_NAME_SENTINEL"));
+    daemon.stop();
+
+    let daemon = Daemon::start(&runtime.0);
+    let restarted = wait_for_matching_agent(&daemon.socket, &cwd.0);
+    let restarted_agent = restarted
+        .agents
+        .iter()
+        .find(|agent| agent.id == id)
+        .unwrap();
+    assert_eq!(restarted.revision, 1);
+    assert_eq!(restarted_agent.name.as_deref(), Some("Agentd spec"));
+    assert_eq!(restarted_agent.activity.state, ActivityState::Unknown);
+
+    let wrong_identity = format!(
+        "{{\"version\":1,\"op\":\"name\",\"agent\":{{\"pid\":{pid},\"startTimeTicks\":{}}},\"name\":\"wrong\"}}\n",
+        id.start_time_ticks + 1
+    );
+    assert_error(
+        &request(&daemon.socket, wrong_identity.as_bytes()),
+        "unknown_agent",
+    );
+    let clear = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["name", "--pid", &pid.to_string(), "--clear"])
+        .env("XDG_RUNTIME_DIR", &runtime.0)
+        .output()
+        .unwrap();
+    assert_silent_success(clear);
+    let clear_again = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        .args(["name", "--pid", &pid.to_string(), "--clear"])
+        .env("XDG_RUNTIME_DIR", &runtime.0)
+        .output()
+        .unwrap();
+    assert_silent_success(clear_again);
+    let cleared: Snapshot = serde_json::from_slice(&request(
+        &daemon.socket,
+        b"{\"version\":1,\"op\":\"snapshot\"}\n",
+    ))
+    .unwrap();
+    assert_eq!(
+        cleared
+            .agents
+            .iter()
+            .find(|agent| agent.id == id)
+            .unwrap()
+            .name,
+        None
+    );
+    assert!(!String::from_utf8_lossy(&fs::read(&registry).unwrap()).contains("Agentd spec"));
+
+    daemon.stop();
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(result, 0);
 }
 
 #[test]
@@ -432,7 +586,7 @@ fn version_reports_the_package_version() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"agentd 0.2.0\n");
+    assert_eq!(output.stdout, b"agentd 0.3.0\n");
     assert!(output.stderr.is_empty());
 }
 
@@ -471,7 +625,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         claude_output,
         format!(
-            "agentd integrate: agentd_version=0.2.0 harness=claude action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"claude --continue|claude --resume\"\n",
+            "agentd integrate: agentd_version=0.3.0 harness=claude action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"claude --continue|claude --resume\"\n",
             claude.join("settings.json").display()
         )
     );
@@ -484,7 +638,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         String::from_utf8(claude_uninstall.stdout).unwrap(),
         format!(
-            "agentd integrate: agentd_version=0.2.0 harness=claude action=uninstall result=changed target={} not_removed=[]\n",
+            "agentd integrate: agentd_version=0.3.0 harness=claude action=uninstall result=changed target={} not_removed=[]\n",
             claude.join("settings.json").display()
         )
     );
@@ -500,7 +654,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         codex_output,
         format!(
-            "agentd integrate: agentd_version=0.2.0 harness=codex action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
+            "agentd integrate: agentd_version=0.3.0 harness=codex action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
             codex.join("hooks.json").display()
         )
     );
@@ -517,7 +671,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         String::from_utf8(second.stdout).unwrap(),
         format!(
-            "agentd integrate: agentd_version=0.2.0 harness=codex action=install result=unchanged target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
+            "agentd integrate: agentd_version=0.3.0 harness=codex action=install result=unchanged target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
             codex.join("hooks.json").display()
         )
     );
@@ -533,7 +687,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         String::from_utf8(uninstall.stdout).unwrap(),
         format!(
-            "agentd integrate: agentd_version=0.2.0 harness=codex action=uninstall result=changed target={} not_removed=[]\n",
+            "agentd integrate: agentd_version=0.3.0 harness=codex action=uninstall result=changed target={} not_removed=[]\n",
             codex.join("hooks.json").display()
         )
     );
@@ -576,6 +730,20 @@ fn request(path: &Path, bytes: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
     reader.read_until(b'\n', &mut frame).unwrap();
     frame
+}
+
+fn wait_for_matching_agent(path: &Path, cwd: &Path) -> Snapshot {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snapshot: Snapshot =
+            serde_json::from_slice(&request(path, b"{\"version\":1,\"op\":\"snapshot\"}\n"))
+                .unwrap();
+        if !matching_agents(&snapshot, cwd).is_empty() {
+            return snapshot;
+        }
+        assert!(Instant::now() < deadline, "agent did not enter roster");
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn assert_error(frame: &[u8], code: &str) {

@@ -1,4 +1,5 @@
-use crate::model::{ActivityState, Snapshot};
+use crate::model::{ActivityState, AgentId, Snapshot};
+use crate::names::validate_display_name;
 use crate::procfs::parse_stat;
 use crate::protocol::human_snapshot;
 use crate::server;
@@ -35,6 +36,22 @@ pub fn run(arguments: Vec<OsString>) -> Result<(), String> {
         {
             activity(pid, state)
         }
+        [command, pid_flag, pid, clear]
+            if command == "name" && pid_flag == "--pid" && clear == "--clear" =>
+        {
+            name(pid, None)
+        }
+        [command, pid_flag, pid, display_name]
+            if command == "name" && pid_flag == "--pid" && display_name != "--clear" =>
+        {
+            name(pid, Some(display_name))
+        }
+        [command, flag, name] if command == "name" && flag == "--from-claude-session-start" => {
+            if !validate_display_name(name) {
+                return Err("agentd name: invalid_name".to_owned());
+            }
+            crate::hook::run_name(name)
+        }
         [command, integration_flag, integration, harness_flag, harness, event_flag, event]
             if command == "hook"
                 && integration_flag == "--integration"
@@ -50,7 +67,7 @@ pub fn run(arguments: Vec<OsString>) -> Result<(), String> {
             crate::integration::run(action, harness)
         }
         _ => Err(
-            "agentd usage failed: expected --version | daemon | list [--json] | watch [--json] | activity --pid <positive-integer> --state active|idle|needs_attention | hook --integration agentd-v1.1 --harness <claude|codex> --event <event> | integrate <install|uninstall> <claude|codex>"
+            "agentd usage failed: expected --version | daemon | list [--json] | watch [--json] | activity --pid <positive-integer> --state active|idle|needs_attention | name --pid <positive-integer> <NAME>|--clear | name --from-claude-session-start <NAME> | hook --integration agentd-v1.1 --harness <claude|codex> --event <event> | integrate <install|uninstall> <claude|codex>"
                 .to_owned(),
         ),
     }
@@ -135,8 +152,50 @@ fn activity(pid: &str, state: &str) -> Result<(), String> {
         .write_all(request.as_bytes())
         .map_err(|error| format!("agentd activity failed: request write: {error}"))?;
     let frame = read_frame(&mut stream, "activity")?;
-    parse_ack_or_error(&frame)?;
+    parse_ack_or_error(&frame, "activity")?;
     Ok(())
+}
+
+fn name(pid: &str, name: Option<&String>) -> Result<(), String> {
+    let pid: u32 = pid
+        .parse()
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| "agentd name failed: pid must be a positive integer".to_owned())?;
+    if name.is_some_and(|name| !validate_display_name(name)) {
+        return Err("agentd name failed: invalid_name".to_owned());
+    }
+    let stat_path = format!("/proc/{pid}/stat");
+    let stat = fs::read_to_string(&stat_path)
+        .map_err(|error| format!("agentd name failed: read {stat_path}: {error}"))?;
+    let start_time_ticks = parse_stat(&stat, pid)
+        .map_err(|error| format!("agentd name failed: parse {stat_path}: {error}"))?
+        .start_time_ticks;
+    submit_name(
+        AgentId {
+            pid,
+            start_time_ticks,
+        },
+        name.map(|name| name.as_str()),
+    )
+}
+
+fn submit_name(id: AgentId, name: Option<&str>) -> Result<(), String> {
+    let request = serde_json::json!({
+        "version": 1,
+        "op": "name",
+        "agent": {"pid": id.pid, "startTimeTicks": id.start_time_ticks},
+        "name": name,
+    });
+    let mut request = serde_json::to_vec(&request)
+        .map_err(|_| "agentd name failed: request serialization".to_owned())?;
+    request.push(b'\n');
+    let mut stream = connect("name")?;
+    stream
+        .write_all(&request)
+        .map_err(|error| format!("agentd name failed: request write: {error}"))?;
+    let frame = read_frame(&mut stream, "name")?;
+    parse_ack_or_error(&frame, "name")
 }
 
 fn connect(operation: &str) -> Result<UnixStream, String> {
@@ -181,36 +240,43 @@ fn parse_snapshot_or_error(frame: &[u8], operation: &str) -> Result<Snapshot, St
         .map_err(|error| format!("agentd {operation} failed: invalid snapshot frame: {error}"))
 }
 
-fn parse_ack_or_error(frame: &[u8]) -> Result<(), String> {
+fn parse_ack_or_error(frame: &[u8], operation: &str) -> Result<(), String> {
     let value: Value = serde_json::from_slice(frame)
-        .map_err(|error| format!("agentd activity failed: invalid response JSON: {error}"))?;
+        .map_err(|error| format!("agentd {operation} failed: invalid response JSON: {error}"))?;
     match value.get("type").and_then(Value::as_str) {
         Some("ack") => {
             let object = value
                 .as_object()
-                .ok_or_else(|| "agentd activity failed: invalid acknowledgement".to_owned())?;
+                .ok_or_else(|| format!("agentd {operation} failed: invalid acknowledgement"))?;
             if object.len() != 3
                 || !object.contains_key("instanceId")
                 || !object.contains_key("revision")
             {
-                return Err("agentd activity failed: invalid acknowledgement fields".to_owned());
+                return Err(format!(
+                    "agentd {operation} failed: invalid acknowledgement fields"
+                ));
             }
             if object.get("instanceId").and_then(Value::as_str).is_none()
                 || object.get("revision").and_then(Value::as_u64).is_none()
             {
-                return Err("agentd activity failed: invalid acknowledgement values".to_owned());
+                return Err(format!(
+                    "agentd {operation} failed: invalid acknowledgement values"
+                ));
             }
             Ok(())
         }
         Some("error") => {
-            let error: ReceivedError = serde_json::from_value(value)
-                .map_err(|error| format!("agentd activity failed: invalid error frame: {error}"))?;
+            let error: ReceivedError = serde_json::from_value(value).map_err(|error| {
+                format!("agentd {operation} failed: invalid error frame: {error}")
+            })?;
             Err(format!(
-                "agentd activity failed: {}: {}",
+                "agentd {operation} failed: {}: {}",
                 error.code, error.message
             ))
         }
-        _ => Err("agentd activity failed: unexpected response type".to_owned()),
+        _ => Err(format!(
+            "agentd {operation} failed: unexpected response type"
+        )),
     }
 }
 
