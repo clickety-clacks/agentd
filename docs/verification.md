@@ -7,6 +7,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --lib
 cargo test --test integration
+cargo test --test release
 ```
 
 After code review, run `scripts/real-smoke.sh` on the unchanged commit. The
@@ -77,3 +78,18 @@ are `commit.txt`, `command.txt`, `socket-path.txt`, `exec-start.txt`, `instance-
 `discovery-ms.txt`, `exit-ms.txt`, `stop-ms.txt`, the socket inventories, the
 dynamic `network-trace.log`, `network-trace-window.txt`,
 `network-trace-activity.json`, the service journal, and `teardown-result.txt`.
+
+## Version 0.3.1 operator skill and package amendment
+
+The release test checks the operator skill's exact frontmatter, the two
+contract corrections to its authoritative source, the site-data denylist, the
+explicit installation-authorization rule, and consistent v0.3.1 metadata. It
+also packages the test binary twice with one fixed source epoch and proves
+identical archive bytes, the complete manifest, fixed directory and file
+modes, the skill bytes in the archive, and a matching `SHA256SUMS` receipt.
+
+Before review, run the skill creator validator directly on
+`skills/agentd`, run `scripts/package-release.sh --dry-run` against the locked
+release binary, and reproduce the package into two separate output
+directories. This stage creates local candidate assets only. It does not
+install the skill or publish a release.

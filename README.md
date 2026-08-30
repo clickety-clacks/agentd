@@ -5,7 +5,7 @@ Codex and Claude coding-agent processes. It observes process existence through
 `/proc`. Optional activity messages enrich an existing record but never create
 or preserve one.
 
-The current Agentd product release is v0.3.0.
+The current Agentd product release is v0.3.1.
 
 The daemon keeps one atomic in-memory snapshot. Local clients read or subscribe
 to complete snapshots through `$XDG_RUNTIME_DIR/agentd.sock`. Process identity
@@ -18,7 +18,7 @@ time values stay explicit.
 Rust 1.97 or later is required.
 
 ```sh
-cargo build --release
+cargo build --release --locked
 ```
 
 The build produces `target/release/agentd`.
@@ -29,7 +29,38 @@ Print the Agentd product version:
 agentd --version
 ```
 
-The v0.3.0 release prints `agentd 0.3.0`.
+The v0.3.1 release prints `agentd 0.3.1`.
+
+## Package a release candidate
+
+Build the locked release binary, inspect the package plan, then create the
+deterministic archive and its checksum receipt:
+
+```sh
+cargo build --release --locked
+scripts/package-release.sh --dry-run
+scripts/package-release.sh
+```
+
+The package command writes
+`target/release-assets/agentd-0.3.1-<rust-host>.tar.gz` and
+`target/release-assets/SHA256SUMS`. The archive contains the binary, this
+README, the systemd user unit, and `skills/agentd/SKILL.md`. It assigns fixed
+file modes, sorts archive entries, removes the gzip timestamp, and uses the
+source commit time for every archive timestamp.
+
+To prove reproduction, package twice from the same commit and binary into two
+output directories, then compare the archives:
+
+```sh
+scripts/package-release.sh --output-dir target/release-assets-a
+scripts/package-release.sh --output-dir target/release-assets-b
+cmp target/release-assets-a/*.tar.gz target/release-assets-b/*.tar.gz
+```
+
+Packaging creates local v0.3.1 candidate files only. It does not publish a
+release, install Agentd, install the operator skill, or change an earlier
+release.
 
 ## Install the user service
 
@@ -43,6 +74,19 @@ systemctl --user enable --now agentd.service
 
 The systemd user manager supplies `XDG_RUNTIME_DIR`. The service creates the
 socket at `$XDG_RUNTIME_DIR/agentd.sock` with mode `0600`.
+
+## Use the Agentd operator skill
+
+The source checkout contains the generic operator skill at
+`skills/agentd/SKILL.md`. A release archive keeps it at the same relative path
+under the archive's top-level directory.
+
+Each agent environment has its own documented skill discovery or installation
+mechanism. Follow that environment's documentation. Do not copy, link, import,
+or install this skill unless the user or installer explicitly authorizes that
+action. Never install it silently. Building Agentd, packaging a release,
+installing the service, and installing harness integrations do not install the
+skill.
 
 ## Inspect and enrich the roster
 
@@ -312,6 +356,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --lib
 cargo test --test integration
+cargo test --test release
 scripts/real-smoke.sh
 ```
 
@@ -323,7 +368,7 @@ records the expanded installed service command, and dynamically traces the
 installed daemon's local-only transport. It tears down the processes and
 service. It writes its evidence directory path on success.
 
-After independent review of an unchanged v0.3.0 release candidate, the release
+After independent review of an unchanged v0.3.1 release candidate, the release
 acceptance also follows both integration procedures above in real Gibson tmux
 sessions. It
 captures the replacement process identities and the `active`, `needs_attention`,

@@ -586,7 +586,7 @@ fn version_reports_the_package_version() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"agentd 0.3.0\n");
+    assert_eq!(output.stdout, b"agentd 0.3.1\n");
     assert!(output.stderr.is_empty());
 }
 
@@ -625,7 +625,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         claude_output,
         format!(
-            "agentd integrate: agentd_version=0.3.0 harness=claude action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"claude --continue|claude --resume\"\n",
+            "agentd integrate: agentd_version=0.3.1 harness=claude action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"claude --continue|claude --resume\"\n",
             claude.join("settings.json").display()
         )
     );
@@ -638,7 +638,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         String::from_utf8(claude_uninstall.stdout).unwrap(),
         format!(
-            "agentd integrate: agentd_version=0.3.0 harness=claude action=uninstall result=changed target={} not_removed=[]\n",
+            "agentd integrate: agentd_version=0.3.1 harness=claude action=uninstall result=changed target={} not_removed=[]\n",
             claude.join("settings.json").display()
         )
     );
@@ -654,7 +654,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         codex_output,
         format!(
-            "agentd integrate: agentd_version=0.3.0 harness=codex action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
+            "agentd integrate: agentd_version=0.3.1 harness=codex action=install result=changed target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
             codex.join("hooks.json").display()
         )
     );
@@ -671,7 +671,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         String::from_utf8(second.stdout).unwrap(),
         format!(
-            "agentd integrate: agentd_version=0.3.0 harness=codex action=install result=unchanged target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
+            "agentd integrate: agentd_version=0.3.1 harness=codex action=install result=unchanged target={} not_removed=[] existing_process=kept_by_procfs activity=unchanged next_activity=accepted_mapped_hook_event activation=restart_only resume=\"codex resume\" trust=next_interactive_startup_review warning=unverified_codex_version version=codex-cli 0.150.0\n",
             codex.join("hooks.json").display()
         )
     );
@@ -687,7 +687,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(
         String::from_utf8(uninstall.stdout).unwrap(),
         format!(
-            "agentd integrate: agentd_version=0.3.0 harness=codex action=uninstall result=changed target={} not_removed=[]\n",
+            "agentd integrate: agentd_version=0.3.1 harness=codex action=uninstall result=changed target={} not_removed=[]\n",
             codex.join("hooks.json").display()
         )
     );
