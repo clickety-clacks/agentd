@@ -14,6 +14,7 @@ pub struct NameStore {
     path: Option<PathBuf>,
     in_memory: bool,
     available: bool,
+    rewrite_needed: bool,
     effective_uid: u32,
     boot_id: String,
     entries: BTreeMap<AgentId, String>,
@@ -56,15 +57,17 @@ impl NameStore {
                     path: Some(path),
                     in_memory: false,
                     available: true,
+                    rewrite_needed: false,
                     effective_uid,
                     boot_id,
                     entries,
                 }
             }
-            Ok(Some(_)) | Ok(None) => Self {
+            Ok(file) => Self {
                 path: Some(path),
                 in_memory: false,
                 available: true,
+                rewrite_needed: file.is_some(),
                 effective_uid,
                 boot_id,
                 entries: BTreeMap::new(),
@@ -78,6 +81,7 @@ impl NameStore {
             path: None,
             in_memory: true,
             available: true,
+            rewrite_needed: false,
             effective_uid: unsafe { libc::geteuid() as u32 },
             boot_id: "8ddf97c5-8f38-4db7-ae9d-3cc8ac70df44".into(),
             entries: BTreeMap::new(),
@@ -94,6 +98,7 @@ impl NameStore {
                 path: Some(path),
                 in_memory: false,
                 available: true,
+                rewrite_needed: false,
                 effective_uid,
                 boot_id,
                 entries: file
@@ -102,10 +107,11 @@ impl NameStore {
                     .map(|entry| (entry.agent, entry.name))
                     .collect(),
             },
-            Ok(Some(_)) | Ok(None) => Self {
+            Ok(file) => Self {
                 path: Some(path),
                 in_memory: false,
                 available: true,
+                rewrite_needed: file.is_some(),
                 effective_uid,
                 boot_id,
                 entries: BTreeMap::new(),
@@ -119,6 +125,7 @@ impl NameStore {
             path,
             in_memory: false,
             available: false,
+            rewrite_needed: false,
             effective_uid,
             boot_id,
             entries: BTreeMap::new(),
@@ -147,6 +154,7 @@ impl NameStore {
         }
         self.persist(&next)?;
         self.entries = next;
+        self.rewrite_needed = false;
         Ok(())
     }
 
@@ -155,8 +163,9 @@ impl NameStore {
             return;
         }
         let next = pruned_entries(&self.entries, liveness);
-        if next != self.entries && self.persist(&next).is_ok() {
+        if (next != self.entries || self.rewrite_needed) && self.persist(&next).is_ok() {
             self.entries = next;
+            self.rewrite_needed = false;
         }
     }
 
@@ -194,15 +203,20 @@ impl NameStore {
             return Err(NameStoreUnavailable);
         }
         ensure_safe_directory(path, self.effective_uid).map_err(|_| NameStoreUnavailable)?;
-        let entries = match load_file(path, self.effective_uid).map_err(|_| NameStoreUnavailable)? {
-            Some(file) if file.boot_id == self.boot_id => file
-                .names
-                .into_iter()
-                .map(|entry| (entry.agent, entry.name))
-                .collect(),
-            Some(_) | None => BTreeMap::new(),
-        };
+        let (entries, rewrite_needed) =
+            match load_file(path, self.effective_uid).map_err(|_| NameStoreUnavailable)? {
+                Some(file) if file.boot_id == self.boot_id => (
+                    file.names
+                        .into_iter()
+                        .map(|entry| (entry.agent, entry.name))
+                        .collect(),
+                    false,
+                ),
+                Some(_) => (BTreeMap::new(), true),
+                None => (BTreeMap::new(), false),
+            };
         self.entries = entries;
+        self.rewrite_needed = rewrite_needed;
         self.available = true;
         Ok(())
     }
@@ -469,6 +483,42 @@ mod tests {
                 "bootId": "8ddf97c5-8f38-4db7-ae9d-3cc8ac70df44",
                 "names": [{"agent":{"pid":7,"startTimeTicks":11},"name":"Agentd spec"}]
             })
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cleanup_replaces_a_prior_boot_registry_even_when_current_entries_are_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "agentd-name-store-prior-boot-{}-{}",
+            std::process::id(),
+            monotonic_suffix()
+        ));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("agentd").join("names.json");
+        let prior_boot = "00000000-0000-0000-0000-000000000000".to_owned();
+        let current_boot = "8ddf97c5-8f38-4db7-ae9d-3cc8ac70df44".to_owned();
+        let uid = unsafe { libc::geteuid() as u32 };
+        let id = AgentId {
+            pid: 424_242,
+            start_time_ticks: 99,
+        };
+
+        let mut prior = NameStore::for_path(path.clone(), prior_boot, uid);
+        prior
+            .replace(id, Some("Prior boot private label".into()), None)
+            .unwrap();
+        let mut current = NameStore::for_path(path.clone(), current_boot.clone(), uid);
+        assert_eq!(current.name_for(id), None);
+
+        current.cleanup(None);
+
+        let registry: RegistryFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(registry.boot_id, current_boot);
+        assert!(registry.names.is_empty());
+        assert!(
+            !String::from_utf8_lossy(&fs::read(&path).unwrap())
+                .contains("Prior boot private label")
         );
         fs::remove_dir_all(root).unwrap();
     }
