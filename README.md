@@ -7,6 +7,8 @@ or preserve one.
 
 The current Agentd product release is v0.3.2.
 
+For multi-machine aggregation, use [agentd-hub](https://github.com/clickety-clacks/agentd-hub).
+
 The daemon keeps one atomic in-memory snapshot. Local clients read or subscribe
 to complete snapshots through `$XDG_RUNTIME_DIR/agentd.sock`. Process identity
 is the pair of PID and Linux process start-time ticks. Unknown presence, working
