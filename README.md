@@ -5,7 +5,7 @@ Codex and Claude coding-agent processes. It observes process existence through
 `/proc`. Optional activity messages enrich an existing record but never create
 or preserve one.
 
-The current Agentd product release is v0.3.1.
+The current Agentd product release is v0.3.2.
 
 The daemon keeps one atomic in-memory snapshot. Local clients read or subscribe
 to complete snapshots through `$XDG_RUNTIME_DIR/agentd.sock`. Process identity
@@ -29,7 +29,7 @@ Print the Agentd product version:
 agentd --version
 ```
 
-The v0.3.1 release prints `agentd 0.3.1`.
+The v0.3.2 release prints `agentd 0.3.2`.
 
 ## Package a release candidate
 
@@ -43,7 +43,7 @@ scripts/package-release.sh
 ```
 
 The package command writes
-`target/release-assets/agentd-0.3.1-<rust-host>.tar.gz` and
+`target/release-assets/agentd-0.3.2-<rust-host>.tar.gz` and
 `target/release-assets/SHA256SUMS`. The archive contains the binary, this
 README, the systemd user unit, and `skills/agentd/SKILL.md`. It assigns fixed
 file modes, sorts archive entries, removes the gzip timestamp, and uses the
@@ -58,7 +58,7 @@ scripts/package-release.sh --output-dir target/release-assets-b
 cmp target/release-assets-a/*.tar.gz target/release-assets-b/*.tar.gz
 ```
 
-Packaging creates local v0.3.1 candidate files only. It does not publish a
+Packaging creates local v0.3.2 candidate files only. It does not publish a
 release, install Agentd, install the operator skill, or change an earlier
 release.
 

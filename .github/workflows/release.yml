@@ -1,0 +1,41 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches the crate and packaging versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          pkg=$(grep -m1 '^AGENTD_RELEASE_VERSION=' scripts/package-release.sh | cut -d= -f2)
+          echo "tag=$tag crate=$crate package=$pkg"
+          [ "$tag" = "$crate" ] && [ "$tag" = "$pkg" ]
+      - name: Gates
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package twice and prove reproduction
+        run: |
+          scripts/package-release.sh --output-dir target/release-assets
+          scripts/package-release.sh --output-dir target/release-assets-b
+          cmp target/release-assets/*.tar.gz target/release-assets-b/*.tar.gz
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            target/release-assets/*.tar.gz target/release-assets/SHA256SUMS \
+            --title "Agentd $GITHUB_REF_NAME" \
+            --notes "CI-built release from $GITHUB_SHA. Deterministic archive from scripts/package-release.sh; verify against SHA256SUMS."
