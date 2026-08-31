@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const VERSION: &str = "0.3.1";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHORITATIVE_SKILL_SHA256: &str =
     "8b7079cb7de05984958b55124f7642ab92a4b8baf5974214e9b9cc85ffa78654";
 
@@ -109,7 +109,9 @@ fn version_and_install_authorization_are_consistent() {
     let readme = read("README.md");
     assert!(cargo.contains(&format!("version = \"{VERSION}\"")));
     assert!(lock.contains(&format!("name = \"agentd\"\nversion = \"{VERSION}\"")));
-    assert!(readme.contains("The current Agentd product release is v0.3.1."));
+    assert!(readme.contains(&format!(
+        "The current Agentd product release is v{VERSION}."
+    )));
     assert!(readme.contains("skills/agentd/SKILL.md"));
     assert!(readme.contains("explicitly authorizes that\naction"));
     assert!(readme.contains("Never install it silently."));
@@ -150,8 +152,8 @@ fn release_archive_manifest_modes_receipt_and_bytes_are_reproducible() {
     );
     assert!(!first.exists());
     let dry_stdout = String::from_utf8(dry_run.stdout).unwrap();
-    assert!(dry_stdout.contains("version=0.3.1"));
-    assert!(dry_stdout.contains("mode=0644 path=agentd-0.3.1-"));
+    assert!(dry_stdout.contains(&format!("version={VERSION}")));
+    assert!(dry_stdout.contains(&format!("mode=0644 path=agentd-{VERSION}-")));
     assert!(dry_stdout.contains("/skills/agentd/SKILL.md"));
 
     for output in [&first, &second] {
