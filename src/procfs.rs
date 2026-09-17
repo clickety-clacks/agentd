@@ -143,9 +143,13 @@ impl ProcfsScanner {
             if !visited.insert(pid) {
                 return Err(HookResolutionError::AncestryUnresolved);
             }
-            let first = self
-                .read_stat(pid)
-                .map_err(|_| HookResolutionError::AncestryUnresolved)?;
+            let first = match self.read_stat(pid) {
+                Ok(stat) => stat,
+                // Init can report start time 0 (rejected by parse_stat); it is
+                // always the end of the chain.
+                Err(_) if pid == 1 => break,
+                Err(_) => return Err(HookResolutionError::AncestryUnresolved),
+            };
             let parent_pid = first.parent_pid;
 
             if let Some(candidate_harness) = live_harness(&first) {
@@ -519,6 +523,11 @@ fn resolve_root(
             return RootResolution::Raced;
         }
         let Some(parent) = first_reads.get(&parent_pid) else {
+            // Init can report start time 0 (rejected by parse_stat); it is
+            // always the end of the chain, never a vanished parent.
+            if parent_pid == 1 {
+                return RootResolution::Root;
+            }
             return RootResolution::Raced;
         };
         if validated
@@ -828,6 +837,21 @@ mod tests {
     }
 
     #[test]
+    fn hook_resolver_stops_at_init_with_zero_start_time() {
+        let procfs = TestProcfs::new("hook-init-zero");
+        procfs.write_process(1, "systemd", 0, 0, 0);
+        procfs.write_process(610, "claude", 1, 6_100, 1000);
+        procfs.write_process(620, "bash", 610, 6_200, 1000);
+        assert_eq!(
+            procfs.scanner().resolve_hook_root(620, Harness::Claude),
+            Ok(AgentId {
+                pid: 610,
+                start_time_ticks: 6_100,
+            })
+        );
+    }
+
+    #[test]
     fn hook_resolver_crosses_different_harness_candidates() {
         let procfs = TestProcfs::new("hook-cross-harness");
         procfs.write_process(510, "codex", 0, 5_100, 1000);
@@ -937,6 +961,24 @@ mod tests {
         assert_eq!(
             failed.agents[0].presence.cause,
             Some(IssueCause::ProcUnavailable)
+        );
+    }
+
+    #[test]
+    fn init_with_zero_start_time_still_ends_the_chain() {
+        let procfs = TestProcfs::new("init-zero");
+        procfs.write_process(1, "systemd", 0, 0, 0);
+        procfs.write_process(500, "systemd", 1, 5_000, 1000);
+        procfs.write_process(600, "claude", 500, 6_000, 1000);
+        let proposal = procfs.scanner().scan(None, &FixedClock(1));
+        assert_eq!(proposal.agents.len(), 1);
+        assert_eq!(proposal.agents[0].id.pid, 600);
+        assert!(
+            !proposal
+                .scan
+                .issues
+                .iter()
+                .any(|issue| issue.field == IssueField::ParentChain)
         );
     }
 
