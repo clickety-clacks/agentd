@@ -25,7 +25,7 @@ jobs:
           cargo clippy --all-targets --all-features -- -D warnings
           cargo test --locked --all-targets
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --bins
       - name: Package twice and prove reproduction
         run: |
           scripts/package-release.sh --output-dir target/release-assets

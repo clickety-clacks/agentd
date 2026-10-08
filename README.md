@@ -388,13 +388,15 @@ skill.
 
 ## Development
 
-Rust 1.97 or later is required. Build from a source checkout:
+Rust 1.97 or later is required. Build both programs from a source checkout:
 
 ```sh
-cargo build --release --locked
+cargo build --release --locked --bins
 ```
 
-The binary is `target/release/agentd`. For deployments, use a published release.
+The base binary is `target/release/agentd`. The separate optional local bridge
+is `target/release/agentd-attention`; see [its package and invocation notes](docs/agentd-attention.md).
+For deployments, use a published release.
 
 ## Releasing
 
@@ -408,26 +410,29 @@ when a matching `v*` tag is pushed.
 3. Tag that commit `vX.Y.Z` with the matching version and push the tag.
 
 CI checks tag, crate, and package version agreement; runs formatting, Clippy,
-and locked tests; builds the release binary; and packages it twice to compare
+and locked tests; builds both binaries; and packages them twice to compare
 archive bytes. It publishes the archive and `SHA256SUMS` as release assets.
 
 ### Check packaging locally
 
-Build the locked release binary, inspect the package plan, then create the
+Build the locked release binaries, inspect the package plan, then create the
 deterministic archive and its checksum receipt:
 
 ```sh
-cargo build --release --locked
+cargo build --release --locked --bins
 scripts/package-release.sh --dry-run
 scripts/package-release.sh
 ```
 
 The package command writes
 `target/release-assets/agentd-0.3.3-<rust-host>.tar.gz` and
-`target/release-assets/SHA256SUMS`. The archive contains the binary, this
-README, the systemd user unit, and `skills/agentd/SKILL.md`. It assigns fixed
-file modes, sorts archive entries, removes the gzip timestamp, and uses the
-source commit time for every archive timestamp.
+`target/release-assets/SHA256SUMS`. The archive contains `agentd`, the optional
+`agentd-attention` binary and service template, this README, bridge invocation
+notes, the base systemd user unit, and `skills/agentd/SKILL.md`. Standard Agentd
+installation still installs only the base daemon; downstream installers choose
+whether to install and enable the bridge. The archive assigns fixed file modes,
+sorts entries, removes the gzip timestamp, and uses the source commit time for
+every archive timestamp.
 
 To prove reproduction, package twice from the same commit and binary into two
 output directories, then compare the archives:
@@ -477,6 +482,14 @@ set/no-op/restart/clear/stale behavior, independent start-time arithmetic,
 missing-tmux fail-open behavior, additive JSON fields, human rendering, and
 absence of private prompt, command, environment, screen, and transcript
 sentinels on Gibson and Osanwe.
+
+The optional attention bridge tests cover sender and episode identity, title
+selection, tmux open argv, omission of message bodies, complete-scan clearing,
+unknown and degraded no-op behavior, reconnect reconciliation, empty local
+subscription, duplicate preservation, and its versioned newline-delimited
+attention frames. They use snapshot fixtures and a protocol peer; actual
+interoperability with the independently built attention daemon is a separate
+cross-project acceptance result.
 
 [The verification map](docs/verification.md) links each acceptance case to its
 automated or real-host proof and lists the real-smoke evidence files.

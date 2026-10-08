@@ -1,0 +1,13 @@
+[Unit]
+Description=Optional local Agentd attention bridge
+After=agentd.service
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/agentd-attention
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=default.target

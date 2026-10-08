@@ -93,3 +93,36 @@ Before review, run the skill creator validator directly on
 release binary, and reproduce the package into two separate output
 directories. This stage creates local candidate assets only. It does not
 install the skill or publish a release.
+
+## Optional Agentd attention bridge
+
+The bridge unit tests exercise the rev4 N4 contract without changing Agentd's
+daemon or watch protocol:
+
+| Acceptance | Proof |
+| --- | --- |
+| AB-1, AB-2 | Exact normalized sender and episode ids, observed timestamp, title fallback order, and tmux argv. |
+| AB-3, AB-4 | Complete-scan clear, degraded/unknown/null-time no-op, and new message posting before superseding the prior open episode. |
+| AB-5 | Startup posts current claims before the empty subscription snapshot, preserves answered duplicates, and reconciles old local messages. |
+| AB-6 | Empty local subscription; foreign senders and answer frames do not change bridge state. |
+| AB-7 | The bridge projection reads only snapshot identity, activity, name, harness, and tmux session fields; outgoing messages omit body and pane data. |
+| AP-1, AP-2 | The socket peer verifies versioned newline-delimited frames, request references, acknowledgment matching, and empty subscription framing. |
+| Packaging | The release test checks both executable versions, fixed archive modes and entries, and reproducible archive bytes. |
+
+These tests use published-snapshot fixtures and a protocol peer. They do not
+claim interoperability with the separately maintained attention daemon; that
+is verified against the core owner's reviewed implementation on its approved
+runner before release acceptance.
+
+For the authorized Linux candidate route, build test artifacts with
+`cargo test --no-run --locked --all-targets --all-features` in an isolated
+Gibson worktree, then transfer the exact binaries, candidate files, test plan,
+Rust host triple and SHA256 manifest to Racter. Use the same absolute candidate
+root on both hosts because the release test embeds `CARGO_MANIFEST_DIR`. Run
+only through `scripts/run-candidate-tests.sh`. It verifies the manifest, executes test
+harnesses serially with a private home and temporary directory, clears the
+inherited `XDG_RUNTIME_DIR` and keeps installed Agentd off `PATH`. The wrapper
+uses the recorded build-host triple only for the packaging script's `rustc -vV`
+identity query; it cannot compile code. Do not use this route for
+`scripts/real-smoke.sh` or claim daemon interoperability until the matching N2
+implementation is available and tested.

@@ -1,3 +1,4 @@
+pub mod attention;
 pub mod cli;
 pub mod hook;
 pub mod integration;
