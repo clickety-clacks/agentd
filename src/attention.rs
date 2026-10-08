@@ -1257,12 +1257,14 @@ mod tests {
         state.open.insert(identity(100));
         state
             .observe_attention_frame(
-                br#"{"v":1,"type":"answer","sender_id":"agentd://example-host/inst-1/48211:9127734","message_id":"needs_attention@100","answer":null}"#,
+                br#"{"v":1,"type":"answer","sender_id":"agentd://example-host/inst-1/48211:9127734","message_id":"needs_attention@100","answer":null}
+"#,
             )
             .unwrap();
         state
             .observe_attention_frame(
-                br#"{"v":1,"type":"lifecycle","sender_id":"agentd://other-host/inst-9/9:10","message_id":"needs_attention@100","state":"cleared","at":1}"#,
+                br#"{"v":1,"type":"lifecycle","sender_id":"agentd://other-host/inst-9/9:10","message_id":"needs_attention@100","state":"cleared","at":1}
+"#,
             )
             .unwrap();
         assert!(state.open.contains(&identity(100)));
