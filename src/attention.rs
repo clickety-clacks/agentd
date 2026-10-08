@@ -675,7 +675,9 @@ impl AttentionClient {
                     if header.reference.as_deref() == Some(reference.as_str()) {
                         self.pending.extend(deferred);
                         return match header.frame_type.as_str() {
-                            "ok" => Ok(header),
+                            "ok" => Ok(AttentionReply {
+                                duplicate: header.duplicate,
+                            }),
                             "error" => Err(RequestError::Rejected {
                                 reason: header.reason.unwrap_or_else(|| "unknown".to_owned()),
                             }),
@@ -880,13 +882,6 @@ enum BridgeEvent {
 
 struct AgentdWatch {
     child: Child,
-}
-
-impl Drop for AgentdWatch {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 impl AgentdWatch {
