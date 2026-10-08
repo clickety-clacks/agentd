@@ -123,6 +123,8 @@ fn package(output: &Path, dry_run: bool) -> std::process::Output {
     command
         .arg("--binary")
         .arg(env!("CARGO_BIN_EXE_agentd"))
+        .arg("--attention-binary")
+        .arg(env!("CARGO_BIN_EXE_agentd-attention"))
         .arg("--output-dir")
         .arg(output)
         .arg("--source-date-epoch")
@@ -154,6 +156,9 @@ fn release_archive_manifest_modes_receipt_and_bytes_are_reproducible() {
     let dry_stdout = String::from_utf8(dry_run.stdout).unwrap();
     assert!(dry_stdout.contains(&format!("version={VERSION}")));
     assert!(dry_stdout.contains(&format!("mode=0644 path=agentd-{VERSION}-")));
+    assert!(dry_stdout.contains(&format!("mode=0755 path=agentd-{VERSION}-")));
+    assert!(dry_stdout.contains("/agentd-attention\n"));
+    assert!(dry_stdout.contains("/docs/agentd-attention.md\n"));
     assert!(dry_stdout.contains("/skills/agentd/SKILL.md"));
 
     for output in [&first, &second] {
@@ -203,8 +208,12 @@ fn release_archive_manifest_modes_receipt_and_bytes_are_reproducible() {
         format!("{package_name}/"),
         format!("{package_name}/README.md"),
         format!("{package_name}/agentd"),
+        format!("{package_name}/agentd-attention"),
+        format!("{package_name}/docs/"),
+        format!("{package_name}/docs/agentd-attention.md"),
         format!("{package_name}/packaging/"),
         format!("{package_name}/packaging/systemd/"),
+        format!("{package_name}/packaging/systemd/agentd-attention.service"),
         format!("{package_name}/packaging/systemd/agentd.service"),
         format!("{package_name}/skills/"),
         format!("{package_name}/skills/agentd/"),
@@ -220,7 +229,9 @@ fn release_archive_manifest_modes_receipt_and_bytes_are_reproducible() {
     assert!(verbose.status.success());
     let verbose = String::from_utf8(verbose.stdout).unwrap();
     for line in verbose.lines() {
-        let mode = if line.ends_with(&format!("{package_name}/agentd")) {
+        let mode = if line.ends_with(&format!("{package_name}/agentd"))
+            || line.ends_with(&format!("{package_name}/agentd-attention"))
+        {
             "-rwxr-xr-x"
         } else if line.ends_with('/') {
             "drwxr-xr-x"
@@ -240,6 +251,18 @@ fn release_archive_manifest_modes_receipt_and_bytes_are_reproducible() {
     assert_eq!(
         skill.stdout,
         fs::read(root().join("skills/agentd/SKILL.md")).unwrap()
+    );
+
+    let bridge_doc = Command::new("tar")
+        .arg("-xOzf")
+        .arg(&archive)
+        .arg(format!("{package_name}/docs/agentd-attention.md"))
+        .output()
+        .unwrap();
+    assert!(bridge_doc.status.success());
+    assert_eq!(
+        bridge_doc.stdout,
+        fs::read(root().join("docs/agentd-attention.md")).unwrap()
     );
 
     fs::remove_dir_all(&scratch).unwrap();
