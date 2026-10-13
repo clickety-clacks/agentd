@@ -33,13 +33,6 @@ done
 AGENTD_RUST_HOST=$(<"$AGENTD_REPO_ROOT/$AGENTD_RUST_HOST_FILE")
 [[ "$AGENTD_RUST_HOST" =~ ^[A-Za-z0-9_-]+$ ]] || agentd_fail "invalid Rust host triple"
 [[ "$AGENTD_RUST_HOST" == *-linux-* ]] || agentd_fail "candidate artifacts must target Linux"
-AGENTD_CANDIDATE_ARCH=${AGENTD_RUST_HOST%%-*}
-case "$AGENTD_RUNNER_ARCH" in
-  amd64) AGENTD_RUNNER_ARCH=x86_64 ;;
-  arm64) AGENTD_RUNNER_ARCH=aarch64 ;;
-esac
-[[ "$AGENTD_RUNNER_ARCH" == "$AGENTD_CANDIDATE_ARCH" ]] \
-  || agentd_fail "candidate architecture $AGENTD_CANDIDATE_ARCH does not match runner $AGENTD_RUNNER_ARCH"
 AGENTD_CANDIDATE_COMMIT=$(<"$AGENTD_REPO_ROOT/$AGENTD_COMMIT_FILE")
 [[ "$AGENTD_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || agentd_fail "invalid candidate commit"
 

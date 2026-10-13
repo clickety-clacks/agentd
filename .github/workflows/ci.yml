@@ -10,7 +10,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain versions
-        run: rustc --version && cargo --version
       - name: Tests
         run: cargo test --locked --all-targets
