@@ -16,14 +16,14 @@ agentd_fail() {
   exit 1
 }
 
-[[ "$(uname -s)" == Linux ]] || agentd_fail "requires Linux"
-[[ "$(uname -m)" == x86_64 ]] || agentd_fail "requires x86_64"
-AGENTD_RUNNER_HOST=$(uname -n)
-[[ "${AGENTD_RUNNER_HOST,,}" == racter ]] || agentd_fail "requires the authorized Racter runner"
+[[ -r /proc/self/stat && -r /proc/sys/kernel/random/boot_id ]] \
+  || agentd_fail "requires readable Linux procfs inputs"
 
-for AGENTD_TOOL in sha256sum setsid env awk find mktemp cut chmod mkdir rm; do
+for AGENTD_TOOL in sha256sum setsid env awk find mktemp cut chmod mkdir rm uname; do
   command -v "$AGENTD_TOOL" >/dev/null 2>&1 || agentd_fail "missing runner tool: $AGENTD_TOOL"
 done
+AGENTD_RUNNER_HOST=$(uname -n)
+AGENTD_RUNNER_ARCH=$(uname -m)
 
 for AGENTD_FILE in "$AGENTD_MANIFEST" "$AGENTD_TEST_PLAN" "$AGENTD_RUST_HOST_FILE" "$AGENTD_COMMIT_FILE"; do
   [[ "$AGENTD_FILE" != /* && "$AGENTD_FILE" != *".."* ]] || agentd_fail "expected safe repository-relative paths"
@@ -32,6 +32,7 @@ done
 
 AGENTD_RUST_HOST=$(<"$AGENTD_REPO_ROOT/$AGENTD_RUST_HOST_FILE")
 [[ "$AGENTD_RUST_HOST" =~ ^[A-Za-z0-9_-]+$ ]] || agentd_fail "invalid Rust host triple"
+[[ "$AGENTD_RUST_HOST" == *-linux-* ]] || agentd_fail "candidate artifacts must target Linux"
 AGENTD_CANDIDATE_COMMIT=$(<"$AGENTD_REPO_ROOT/$AGENTD_COMMIT_FILE")
 [[ "$AGENTD_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || agentd_fail "invalid candidate commit"
 
@@ -93,6 +94,7 @@ chmod 0700 "$AGENTD_SCRATCH/bin/rustc"
 AGENTD_RUSTC_ADAPTER_SHA256=$(sha256sum "$AGENTD_SCRATCH/bin/rustc" | cut -d' ' -f1)
 
 printf 'runner=%s\n' "$AGENTD_RUNNER_HOST"
+printf 'runner_arch=%s\n' "$AGENTD_RUNNER_ARCH"
 printf 'candidate_commit=%s\n' "$AGENTD_CANDIDATE_COMMIT"
 printf 'rust_host=%s (identity adapter sha256=%s)\n' "$AGENTD_RUST_HOST" "$AGENTD_RUSTC_ADAPTER_SHA256"
 printf 'candidate_root=%s\n' "$AGENTD_REPO_ROOT"

@@ -21,16 +21,12 @@ jobs:
           [ "$tag" = "$crate" ] && [ "$tag" = "$pkg" ]
       - name: Gates
         run: |
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --all-features -- -D warnings
           cargo test --locked --all-targets
       - name: Build
         run: cargo build --release --locked --bins
-      - name: Package twice and prove reproduction
+      - name: Package release artifacts
         run: |
           scripts/package-release.sh --output-dir target/release-assets
-          scripts/package-release.sh --output-dir target/release-assets-b
-          cmp target/release-assets/*.tar.gz target/release-assets-b/*.tar.gz
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

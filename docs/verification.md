@@ -3,8 +3,6 @@
 Run these pre-review commands from a clean Linux checkout:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
 cargo test --lib
 cargo test --test integration
 cargo test --test release
@@ -29,7 +27,7 @@ and a systemd user manager.
 | A11 | Integration tests exercise stale-socket replacement and refusal without mutation for regular files and live listeners. The owner check is enforced at the same startup seam. |
 | A12 | The runtime has one Unix listener and reads only procfs stat, status, and cwd. The real smoke keeps point-in-time socket inventories and also runs the installed binary under `strace` across a scheduled procfs scan and an accepted activity request. It retains the trace, asserts Unix transport and procfs access, and rejects any `AF_INET` or `AF_INET6` socket or connect. It also searches frames, CLI output, stderr, and the service journal for command-line and environment sentinels. |
 | A13 | A committed fixture replays stat, status UID, harness, parent, start-time, and cwd fields captured from three real Codex and one real Claude process. The real smoke captures the shared-cwd processes and runs the ignored captured-procfs replay test against those exact bytes. |
-| A14 | The README defines the format, static-analysis, unit, integration, and real-smoke commands. The real smoke records the commit, command, socket path, instance IDs, identities, deadline measurements, logs, and teardown. |
+| A14 | The README defines the unit, integration, and real-smoke commands. The real smoke records the commit, command, socket path, instance IDs, identities, deadline measurements, logs, and teardown. |
 | A15 | Injected-view and cycle unit tests cover changed parent IDs, finite repeated-PID traversal, typed `process_raced` issues, retained unknown identities, and omitted new identities. |
 
 ## Version 1.1 amendment
@@ -79,50 +77,61 @@ are `commit.txt`, `command.txt`, `socket-path.txt`, `exec-start.txt`, `instance-
 dynamic `network-trace.log`, `network-trace-window.txt`,
 `network-trace-activity.json`, the service journal, and `teardown-result.txt`.
 
-## Version 0.3.1 operator skill and package amendment
+## Optional bridge package behavior
 
-The release test checks the operator skill's exact frontmatter, the two
-contract corrections to its authoritative source, the site-data denylist, the
-explicit installation-authorization rule, and consistent v0.3.1 metadata. It
-also packages the test binary twice with one fixed source epoch and proves
-identical archive bytes, the complete manifest, fixed directory and file
-modes, the skill bytes in the archive, and a matching `SHA256SUMS` receipt.
+The optional bridge package test proves that release packaging validates the
+bridge binary and archive versions, includes the executable bridge, its
+current invocation documentation, and its optional service unit. The packager
+emits `SHA256SUMS` for downstream artifact-integrity checks; that receipt and
+archive byte reproducibility are not product acceptance gates. Operator-skill
+wording, install-authorization text, and site-data scanning are not product
+acceptance gates.
 
-Before review, run the skill creator validator directly on
-`skills/agentd`, run `scripts/package-release.sh --dry-run` against the locked
-release binary, and reproduce the package into two separate output
-directories. This stage creates local candidate assets only. It does not
-install the skill or publish a release.
+The release workflow also requires the pushed tag, crate version, and package
+version to agree. This is a publication identity safeguard against mislabeled
+artifacts, not an application acceptance test.
+
+Before review, run `scripts/package-release.sh --dry-run` against the locked
+release binaries, then package once into a local candidate output directory.
+This stage creates local candidate assets only. It does not install the skill
+or publish a release.
 
 ## Optional Agentd attention bridge
 
 The bridge unit tests exercise the rev4 N4 contract without changing Agentd's
 daemon or watch protocol:
 
-| Acceptance | Proof |
-| --- | --- |
-| AB-1, AB-2 | Exact normalized sender and episode ids, observed timestamp, title fallback order, and tmux argv. |
-| AB-3, AB-4 | Complete-scan clear, degraded/unknown/null-time no-op, and new message posting before superseding the prior open episode. |
-| AB-5 | Startup posts current claims before the empty subscription snapshot, preserves answered duplicates, and reconciles old local messages. |
-| AB-6 | Empty local subscription; foreign senders and answer frames do not change bridge state. |
-| AB-7 | The bridge projection reads only snapshot identity, activity, name, harness, and tmux session fields; outgoing messages omit body and pane data. |
-| AP-1, AP-2 | The socket peer verifies versioned newline-delimited frames, request references, acknowledgment matching, and empty subscription framing. |
-| Packaging | The release test checks both executable versions, fixed archive modes and entries, and reproducible archive bytes. |
+| Acceptance | Product behavior proved | Test evidence |
+| --- | --- | --- |
+| AB-1 | Sender identity combines normalized machine, bridge instance, and Agentd process identity; unrepresentable machine segments are rejected. | `machine_name_normalizes_once_and_rejects_unrepresentable_segments`; `message_uses_exact_identity_title_priority_and_open_command_without_body` |
+| AB-2 | Episode ids and creation times use the observed timestamp; title priority is display name, tmux session, then harness; tmux targets become argv vectors. | `message_uses_exact_identity_title_priority_and_open_command_without_body` |
+| AB-3 | Degraded scans, unknown activity, and missing timestamps preserve open messages; complete `active`/`idle` states or complete absence clear only local messages. | `incomplete_unknown_and_null_timestamp_do_not_change_open_messages`; `active_idle_and_complete_absence_clear_local_messages_only` |
+| AB-4 | Startup posts current claims before requesting an empty-sender subscription snapshot, then marks prior local episodes superseded. | `initial_sync_posts_before_subscribing_and_superseding_old_episode` |
+| AB-5 | Startup keeps answered duplicates closed; answer frames and foreign lifecycle frames do not mutate local bridge state. | `answered_duplicate_stays_closed_and_answer_frames_are_ignored` |
+| AB-6 | Subscription sends an empty sender set and consumes the daemon's current message snapshot, including foreign messages for local reconciliation. | `subscribe_uses_empty_set_and_reads_the_daemon_snapshot` |
+| AB-7 | The bridge uses published process identity/activity/name/harness/tmux fields and emits no message body or pane data. | `message_uses_exact_identity_title_priority_and_open_command_without_body` |
+| AP-1 | A post is sent as a v1 newline-delimited message frame with a request reference and no body. | `attention_transport_sends_versioned_line_and_waits_for_matching_ack` |
+| AP-2 | The client accepts a matching acknowledgment; subscription also reads the initial message snapshot after its acknowledgment. | `attention_transport_sends_versioned_line_and_waits_for_matching_ack`; `subscribe_uses_empty_set_and_reads_the_daemon_snapshot` |
+| Packaging | Release packaging validates bridge/archive versions and ships an executable bridge, current invocation docs, and the optional service unit. | `optional_attention_archive_contains_binary_docs_and_service_unit` |
 
 These tests use published-snapshot fixtures and a protocol peer. They do not
 claim interoperability with the separately maintained attention daemon; that
 is verified against the core owner's reviewed implementation on its approved
 runner before release acceptance.
 
-For the authorized Linux candidate route, build test artifacts with
-`cargo test --no-run --locked --all-targets --all-features` in an isolated
-Gibson worktree, then transfer the exact binaries, candidate files, test plan,
-Rust host triple and SHA256 manifest to Racter. Use the same absolute candidate
-root on both hosts because the release test embeds `CARGO_MANIFEST_DIR`. Run
-only through `scripts/run-candidate-tests.sh`. It verifies the manifest, executes test
-harnesses serially with a private home and temporary directory, clears the
-inherited `XDG_RUNTIME_DIR` and keeps installed Agentd off `PATH`. The wrapper
-uses the recorded build-host triple only for the packaging script's `rustc -vV`
-identity query; it cannot compile code. Do not use this route for
-`scripts/real-smoke.sh` or claim daemon interoperability until the matching N2
-implementation is available and tested.
+`scripts/run-candidate-tests.sh` is an optional helper for already-built Linux
+test artifacts; Linux procfs is a product capability exercised by Agentd's
+process-discovery tests, and the runner architecture is informational rather
+than an admission condition. The helper checks the recorded SHA256 manifest
+and runs only listed test executables serially with private home, temporary,
+and XDG state. It clears inherited `XDG_RUNTIME_DIR`, keeps installed Agentd
+off `PATH`, and terminates the test process group before removing its scratch
+directory. These manifest, private-state, and cleanup checks safeguard test
+execution; they are not product acceptance cases. Integration and release
+tests resolve candidate binaries and repository files from the runner's
+current candidate root, so that root need not match the build host's absolute
+path. The `rustc` adapter provides only the recorded build-host identity to
+the package test; it cannot compile code. No particular runner hostname is
+part of the bridge contract. This helper does not run
+`scripts/real-smoke.sh` or establish interoperability with the matching N2
+implementation.

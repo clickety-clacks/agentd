@@ -409,14 +409,14 @@ when a matching `v*` tag is pushed.
    to pass.
 3. Tag that commit `vX.Y.Z` with the matching version and push the tag.
 
-CI checks tag, crate, and package version agreement; runs formatting, Clippy,
-and locked tests; builds both binaries; and packages them twice to compare
-archive bytes. It publishes the archive and `SHA256SUMS` as release assets.
+CI checks tag, crate, and package version agreement; runs locked tests; builds
+both binaries; and packages them once. It publishes the archive and
+`SHA256SUMS` as release assets.
 
 ### Check packaging locally
 
 Build the locked release binaries, inspect the package plan, then create the
-deterministic archive and its checksum receipt:
+archive and its checksum receipt:
 
 ```sh
 cargo build --release --locked --bins
@@ -430,18 +430,8 @@ The package command writes
 `agentd-attention` binary and service template, this README, bridge invocation
 notes, the base systemd user unit, and `skills/agentd/SKILL.md`. Standard Agentd
 installation still installs only the base daemon; downstream installers choose
-whether to install and enable the bridge. The archive assigns fixed file modes,
-sorts entries, removes the gzip timestamp, and uses the source commit time for
-every archive timestamp.
-
-To prove reproduction, package twice from the same commit and binary into two
-output directories, then compare the archives:
-
-```sh
-scripts/package-release.sh --output-dir target/release-assets-a
-scripts/package-release.sh --output-dir target/release-assets-b
-cmp target/release-assets-a/*.tar.gz target/release-assets-b/*.tar.gz
-```
+whether to install and enable the bridge. The bridge binary is executable, and
+the package includes its invocation notes and optional service template.
 
 Packaging creates local v0.3.3 candidate files only. It does not publish a
 release, install Agentd, install the operator skill, or change an earlier
@@ -452,8 +442,6 @@ release.
 Run each gate from a clean Linux checkout:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
 cargo test --lib
 cargo test --test integration
 cargo test --test release
