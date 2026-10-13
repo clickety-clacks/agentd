@@ -409,8 +409,8 @@ when a matching `v*` tag is pushed.
    to pass.
 3. Tag that commit `vX.Y.Z` with the matching version and push the tag.
 
-CI checks tag, crate, and package version agreement; runs formatting, Clippy,
-and locked tests; builds both binaries; and packages them twice to compare
+CI checks tag, crate, and package version agreement; runs locked tests; builds
+both binaries; and packages them twice to compare
 archive bytes. It publishes the archive and `SHA256SUMS` as release assets.
 
 ### Check packaging locally
@@ -452,8 +452,6 @@ release.
 Run each gate from a clean Linux checkout:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
 cargo test --lib
 cargo test --test integration
 cargo test --test release

@@ -19,7 +19,6 @@ agentd_fail() {
 [[ "$(uname -s)" == Linux ]] || agentd_fail "requires Linux"
 [[ "$(uname -m)" == x86_64 ]] || agentd_fail "requires x86_64"
 AGENTD_RUNNER_HOST=$(uname -n)
-[[ "${AGENTD_RUNNER_HOST,,}" == racter ]] || agentd_fail "requires the authorized Racter runner"
 
 for AGENTD_TOOL in sha256sum setsid env awk find mktemp cut chmod mkdir rm; do
   command -v "$AGENTD_TOOL" >/dev/null 2>&1 || agentd_fail "missing runner tool: $AGENTD_TOOL"

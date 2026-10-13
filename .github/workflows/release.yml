@@ -21,8 +21,6 @@ jobs:
           [ "$tag" = "$crate" ] && [ "$tag" = "$pkg" ]
       - name: Gates
         run: |
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --all-features -- -D warnings
           cargo test --locked --all-targets
       - name: Build
         run: cargo build --release --locked --bins

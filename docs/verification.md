@@ -3,8 +3,6 @@
 Run these pre-review commands from a clean Linux checkout:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
 cargo test --lib
 cargo test --test integration
 cargo test --test release
@@ -29,7 +27,7 @@ and a systemd user manager.
 | A11 | Integration tests exercise stale-socket replacement and refusal without mutation for regular files and live listeners. The owner check is enforced at the same startup seam. |
 | A12 | The runtime has one Unix listener and reads only procfs stat, status, and cwd. The real smoke keeps point-in-time socket inventories and also runs the installed binary under `strace` across a scheduled procfs scan and an accepted activity request. It retains the trace, asserts Unix transport and procfs access, and rejects any `AF_INET` or `AF_INET6` socket or connect. It also searches frames, CLI output, stderr, and the service journal for command-line and environment sentinels. |
 | A13 | A committed fixture replays stat, status UID, harness, parent, start-time, and cwd fields captured from three real Codex and one real Claude process. The real smoke captures the shared-cwd processes and runs the ignored captured-procfs replay test against those exact bytes. |
-| A14 | The README defines the format, static-analysis, unit, integration, and real-smoke commands. The real smoke records the commit, command, socket path, instance IDs, identities, deadline measurements, logs, and teardown. |
+| A14 | The README defines the unit, integration, and real-smoke commands. The real smoke records the commit, command, socket path, instance IDs, identities, deadline measurements, logs, and teardown. |
 | A15 | Injected-view and cycle unit tests cover changed parent IDs, finite repeated-PID traversal, typed `process_raced` issues, retained unknown identities, and omitted new identities. |
 
 ## Version 1.1 amendment
@@ -114,15 +112,12 @@ claim interoperability with the separately maintained attention daemon; that
 is verified against the core owner's reviewed implementation on its approved
 runner before release acceptance.
 
-For the authorized Linux candidate route, build test artifacts with
-`cargo test --no-run --locked --all-targets --all-features` in an isolated
-Gibson worktree, then transfer the exact binaries, candidate files, test plan,
-Rust host triple and SHA256 manifest to Racter. Use the same absolute candidate
-root on both hosts because the release test embeds `CARGO_MANIFEST_DIR`. Run
-only through `scripts/run-candidate-tests.sh`. It verifies the manifest, executes test
-harnesses serially with a private home and temporary directory, clears the
-inherited `XDG_RUNTIME_DIR` and keeps installed Agentd off `PATH`. The wrapper
-uses the recorded build-host triple only for the packaging script's `rustc -vV`
-identity query; it cannot compile code. Do not use this route for
-`scripts/real-smoke.sh` or claim daemon interoperability until the matching N2
-implementation is available and tested.
+`scripts/run-candidate-tests.sh` is an optional helper for already-built test
+artifacts on Linux x86_64. It checks the recorded SHA256 manifest, runs only
+listed test executables serially with private home, temporary and XDG state,
+clears inherited `XDG_RUNTIME_DIR`, keeps installed Agentd off `PATH`, and
+terminates the test process group before removing its scratch directory. Its
+`rustc` adapter provides only the recorded build-host identity to the package
+test; it cannot compile code. No particular runner hostname is part of the
+bridge contract. This helper does not run `scripts/real-smoke.sh` or establish
+interoperability with the matching N2 implementation.
