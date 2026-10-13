@@ -8,7 +8,15 @@ const AUTHORITATIVE_SKILL_SHA256: &str =
     "8b7079cb7de05984958b55124f7642ab92a4b8baf5974214e9b9cc85ffa78654";
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    std::env::current_dir().expect("release tests run from the candidate repository root")
+}
+
+fn agentd_binary() -> PathBuf {
+    root().join("target/debug/agentd")
+}
+
+fn agentd_attention_binary() -> PathBuf {
+    root().join("target/debug/agentd-attention")
 }
 
 fn read(relative: &str) -> String {
@@ -122,9 +130,9 @@ fn package(output: &Path, dry_run: bool) -> std::process::Output {
     let mut command = Command::new(root().join("scripts/package-release.sh"));
     command
         .arg("--binary")
-        .arg(env!("CARGO_BIN_EXE_agentd"))
+        .arg(agentd_binary())
         .arg("--attention-binary")
-        .arg(env!("CARGO_BIN_EXE_agentd-attention"))
+        .arg(agentd_attention_binary())
         .arg("--output-dir")
         .arg(output)
         .arg("--source-date-epoch")

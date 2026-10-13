@@ -10,6 +10,12 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+fn agentd_binary() -> PathBuf {
+    std::env::current_dir()
+        .expect("integration tests run from the candidate repository root")
+        .join("target/debug/agentd")
+}
+
 struct TestDir(PathBuf);
 
 impl TestDir {
@@ -38,7 +44,7 @@ struct Daemon {
 
 impl Daemon {
     fn start(runtime: &Path) -> Self {
-        let child = Command::new(env!("CARGO_BIN_EXE_agentd"))
+        let child = Command::new(agentd_binary())
             .arg("daemon")
             .env("XDG_RUNTIME_DIR", runtime)
             .env("XDG_STATE_HOME", runtime.join("state"))
@@ -208,7 +214,7 @@ fn real_procfs_roster_stream_activity_and_exit_deadline() {
         ActivityState::Unknown
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let output = Command::new(agentd_binary())
         .args([
             "activity",
             "--pid",
@@ -231,7 +237,7 @@ fn real_procfs_roster_stream_activity_and_exit_deadline() {
         agentd::model::SnapshotReason::ActivityChanged
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let output = Command::new(agentd_binary())
         .args([
             "activity",
             "--pid",
@@ -286,7 +292,7 @@ fn regular_file_at_socket_path_is_refused_without_removal() {
     let runtime = TestDir::new("regular-path");
     let socket = runtime.0.join("agentd.sock");
     fs::write(&socket, b"do not remove").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let output = Command::new(agentd_binary())
         .arg("daemon")
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .env("XDG_STATE_HOME", runtime.0.join("state"))
@@ -311,7 +317,7 @@ fn stale_socket_is_replaced_but_live_listener_is_preserved() {
     let live_path = live_runtime.0.join("agentd.sock");
     let listener = UnixListener::bind(&live_path).unwrap();
     let live_inode = fs::symlink_metadata(&live_path).unwrap().ino();
-    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let output = Command::new(agentd_binary())
         .arg("daemon")
         .env("XDG_RUNTIME_DIR", &live_runtime.0)
         .env("XDG_STATE_HOME", live_runtime.0.join("state"))
@@ -374,7 +380,7 @@ fn captured_real_procfs_fixtures_replay_parser_fields() {
 #[test]
 fn hook_adapter_discards_payload_and_fails_open_with_a_typed_diagnostic() {
     let started = Instant::now();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let mut child = Command::new(agentd_binary())
         .args([
             "hook",
             "--integration",
@@ -407,7 +413,7 @@ fn hook_adapter_discards_payload_and_fails_open_with_a_typed_diagnostic() {
     assert_eq!(diagnostic, "agentd hook: ancestry_unresolved\n");
     assert!(!diagnostic.contains("PRIVATE_PROMPT_AND_TOOL_INPUT"));
 
-    let invalid = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let invalid = Command::new(agentd_binary())
         .args([
             "hook",
             "--integration",
@@ -427,7 +433,7 @@ fn hook_adapter_discards_payload_and_fails_open_with_a_typed_diagnostic() {
         "agentd hook: invalid_hook_event\n"
     );
 
-    let mut name = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let mut name = Command::new(agentd_binary())
         .args(["name", "--from-claude-session-start", "Review lane"])
         .env_remove("XDG_RUNTIME_DIR")
         .stdin(Stdio::piped())
@@ -478,7 +484,7 @@ fn name_set_restart_clear_and_stale_identity_are_exact_and_persistent() {
     assert_eq!(agent.name, None);
     let initial_revision = initial.revision;
 
-    let set = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let set = Command::new(agentd_binary())
         .args(["name", "--pid", &pid.to_string(), "Agentd spec"])
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .output()
@@ -501,7 +507,7 @@ fn name_set_restart_clear_and_stale_identity_are_exact_and_persistent() {
         Some("Agentd spec")
     );
 
-    let identical = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let identical = Command::new(agentd_binary())
         .args(["name", "--pid", &pid.to_string(), "Agentd spec"])
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .output()
@@ -546,13 +552,13 @@ fn name_set_restart_clear_and_stale_identity_are_exact_and_persistent() {
         &request(&daemon.socket, wrong_identity.as_bytes()),
         "unknown_agent",
     );
-    let clear = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let clear = Command::new(agentd_binary())
         .args(["name", "--pid", &pid.to_string(), "--clear"])
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .output()
         .unwrap();
     assert_silent_success(clear);
-    let clear_again = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let clear_again = Command::new(agentd_binary())
         .args(["name", "--pid", &pid.to_string(), "--clear"])
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .output()
@@ -581,7 +587,7 @@ fn name_set_restart_clear_and_stale_identity_are_exact_and_persistent() {
 
 #[test]
 fn version_reports_the_package_version() {
-    let output = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let output = Command::new(agentd_binary())
         .arg("--version")
         .output()
         .unwrap();
@@ -619,7 +625,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     let trust_bytes = b"[hooks.state]\ntrusted_hash = \"codex-owned\"\n";
     fs::write(&trust, trust_bytes).unwrap();
 
-    let claude_install = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let claude_install = Command::new(agentd_binary())
         .args(["integrate", "install", "claude"])
         .env("CLAUDE_CONFIG_DIR", &claude)
         .output()
@@ -633,7 +639,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
             claude.join("settings.json").display()
         )
     );
-    let claude_uninstall = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let claude_uninstall = Command::new(agentd_binary())
         .args(["integrate", "uninstall", "claude"])
         .env("CLAUDE_CONFIG_DIR", &claude)
         .output()
@@ -647,7 +653,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
         )
     );
 
-    let codex_install = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let codex_install = Command::new(agentd_binary())
         .args(["integrate", "install", "codex"])
         .env("CODEX_HOME", &codex)
         .env("PATH", &path)
@@ -665,7 +671,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     assert_eq!(fs::read(&trust).unwrap(), trust_bytes);
 
     let installed = fs::read(codex.join("hooks.json")).unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let second = Command::new(agentd_binary())
         .args(["integrate", "install", "codex"])
         .env("CODEX_HOME", &codex)
         .env("PATH", &path)
@@ -681,7 +687,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     );
     assert_eq!(fs::read(codex.join("hooks.json")).unwrap(), installed);
 
-    let uninstall = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let uninstall = Command::new(agentd_binary())
         .args(["integrate", "uninstall", "codex"])
         .env("CODEX_HOME", &codex)
         .env("PATH", "/nonexistent")
@@ -706,7 +712,7 @@ fn integration_cli_gates_codex_and_names_restart_only_activation() {
     )
     .unwrap();
     let before_rejected_install = fs::read(codex.join("hooks.json")).unwrap();
-    let rejected = Command::new(env!("CARGO_BIN_EXE_agentd"))
+    let rejected = Command::new(agentd_binary())
         .args(["integrate", "install", "codex"])
         .env("CODEX_HOME", &codex)
         .env("PATH", &path)

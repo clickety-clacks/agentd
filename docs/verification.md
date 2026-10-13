@@ -112,12 +112,16 @@ claim interoperability with the separately maintained attention daemon; that
 is verified against the core owner's reviewed implementation on its approved
 runner before release acceptance.
 
-`scripts/run-candidate-tests.sh` is an optional helper for already-built test
-artifacts on Linux x86_64. It checks the recorded SHA256 manifest, runs only
-listed test executables serially with private home, temporary and XDG state,
-clears inherited `XDG_RUNTIME_DIR`, keeps installed Agentd off `PATH`, and
-terminates the test process group before removing its scratch directory. Its
-`rustc` adapter provides only the recorded build-host identity to the package
-test; it cannot compile code. No particular runner hostname is part of the
-bridge contract. This helper does not run `scripts/real-smoke.sh` or establish
-interoperability with the matching N2 implementation.
+`scripts/run-candidate-tests.sh` is an optional helper for already-built Linux
+test artifacts. It requires readable procfs inputs and checks that the runner
+architecture matches the recorded Rust target; it checks the recorded SHA256
+manifest and runs only listed test executables serially with private home,
+temporary and XDG state. It clears inherited `XDG_RUNTIME_DIR`, keeps installed
+Agentd off `PATH`, and terminates the test process group before removing its
+scratch directory. Integration and release tests resolve candidate binaries
+and repository files from the runner's current candidate root, so that root
+need not match the build host's absolute path. The `rustc` adapter provides
+only the recorded build-host identity to the package test; it cannot compile
+code. No particular runner hostname is part of the bridge contract. This
+helper does not run `scripts/real-smoke.sh` or establish interoperability with
+the matching N2 implementation.
