@@ -87,6 +87,10 @@ archive byte reproducibility are not product acceptance gates. Operator-skill
 wording, install-authorization text, and site-data scanning are not product
 acceptance gates.
 
+The release workflow also requires the pushed tag, crate version, and package
+version to agree. This is a publication identity safeguard against mislabeled
+artifacts, not an application acceptance test.
+
 Before review, run `scripts/package-release.sh --dry-run` against the locked
 release binaries, then package once into a local candidate output directory.
 This stage creates local candidate assets only. It does not install the skill
