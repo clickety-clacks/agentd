@@ -24,7 +24,8 @@ fn package(output: &Path) -> std::process::Output {
         .arg("--attention-binary")
         .arg(agentd_attention_binary())
         .arg("--output-dir")
-        .arg(output);
+        .arg(output)
+        .args(["--source-date-epoch", "0"]);
     command.output().unwrap()
 }
 
