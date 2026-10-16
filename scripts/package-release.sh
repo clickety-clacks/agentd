@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 022
 
 AGENTD_REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-AGENTD_RELEASE_VERSION=0.3.3
+AGENTD_RELEASE_VERSION=0.3.4
 AGENTD_BINARY="$AGENTD_REPO_ROOT/target/release/agentd"
 AGENTD_ATTENTION_BINARY="$AGENTD_REPO_ROOT/target/release/agentd-attention"
 AGENTD_OUTPUT_DIR="$AGENTD_REPO_ROOT/target/release-assets"

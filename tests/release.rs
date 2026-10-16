@@ -91,6 +91,34 @@ fn optional_attention_archive_contains_binary_docs_and_service_unit() {
         .expect("bridge binary is listed in the package");
     assert!(bridge_mode.starts_with("-rwxr-xr-x"));
 
+    let extracted = scratch.join("extracted");
+    fs::create_dir(&extracted).unwrap();
+    let extraction = Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extracted)
+        .output()
+        .unwrap();
+    assert!(
+        extraction.status.success(),
+        "{}",
+        String::from_utf8_lossy(&extraction.stderr)
+    );
+    let packaged_bridge = Command::new(extracted.join(&package_name).join("agentd-attention"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        packaged_bridge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packaged_bridge.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(packaged_bridge.stdout).unwrap(),
+        format!("agentd-attention {VERSION}\n")
+    );
+
     let bridge_doc = Command::new("tar")
         .arg("-xOzf")
         .arg(&archive)
