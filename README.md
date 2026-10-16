@@ -6,7 +6,8 @@ running Claude Code and Codex agents. It discovers their processes through
 or has unknown activity. Activity comes from optional hooks, never from CPU
 usage or elapsed time.
 
-The current Agentd product release is v0.3.3.
+The source tree targets v0.3.4; the latest published release remains v0.3.3
+until the matching tag and archive are published.
 
 Use `agentd list` for a snapshot or `agentd watch --json` to subscribe to changes.
 Each update contains the complete current roster. Agentd uses a local Unix
@@ -425,7 +426,7 @@ scripts/package-release.sh
 ```
 
 The package command writes
-`target/release-assets/agentd-0.3.3-<rust-host>.tar.gz` and
+`target/release-assets/agentd-0.3.4-<rust-host>.tar.gz` and
 `target/release-assets/SHA256SUMS`. The archive contains `agentd`, the optional
 `agentd-attention` binary and service template, this README, bridge invocation
 notes, the base systemd user unit, and `skills/agentd/SKILL.md`. Standard Agentd
@@ -433,7 +434,7 @@ installation still installs only the base daemon; downstream installers choose
 whether to install and enable the bridge. The bridge binary is executable, and
 the package includes its invocation notes and optional service template.
 
-Packaging creates local v0.3.3 candidate files only. It does not publish a
+Packaging creates local v0.3.4 candidate files only. It does not publish a
 release, install Agentd, install the operator skill, or change an earlier
 release.
 

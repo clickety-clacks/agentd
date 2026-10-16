@@ -112,7 +112,7 @@ daemon or watch protocol:
 | AB-7 | The bridge uses published process identity/activity/name/harness/tmux fields and emits no message body or pane data. | `message_uses_exact_identity_title_priority_and_open_command_without_body` |
 | AP-1 | A post is sent as a v1 newline-delimited message frame with a request reference and no body. | `attention_transport_sends_versioned_line_and_waits_for_matching_ack` |
 | AP-2 | The client accepts a matching acknowledgment; subscription also reads the initial message snapshot after its acknowledgment. | `attention_transport_sends_versioned_line_and_waits_for_matching_ack`; `subscribe_uses_empty_set_and_reads_the_daemon_snapshot` |
-| Packaging | Release packaging validates bridge/archive versions and ships an executable bridge, current invocation docs, and the optional service unit. | `optional_attention_archive_contains_binary_docs_and_service_unit` |
+| Packaging | Release packaging validates versions, ships the optional executable and its invocation docs, and runs the extracted bridge to confirm its packaged `--version` output. | `optional_attention_archive_contains_binary_docs_and_service_unit` |
 
 These tests use published-snapshot fixtures and a protocol peer. They do not
 claim interoperability with the separately maintained attention daemon; that
