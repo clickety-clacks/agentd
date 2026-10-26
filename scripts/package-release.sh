@@ -11,6 +11,7 @@ AGENTD_ATTENTION_BINARY="$AGENTD_REPO_ROOT/target/release/agentd-attention"
 AGENTD_OUTPUT_DIR="$AGENTD_REPO_ROOT/target/release-assets"
 AGENTD_SOURCE_DATE_EPOCH=
 AGENTD_DRY_RUN=false
+AGENTD_INCLUDE_ATTENTION=false
 
 agentd_usage() {
   echo "usage: scripts/package-release.sh [--dry-run] [--binary PATH] [--attention-binary PATH] [--output-dir DIR] [--source-date-epoch SECONDS]" >&2
@@ -53,10 +54,6 @@ done
   echo "package release: binary is not executable: $AGENTD_BINARY" >&2
   exit 1
 }
-[[ -x "$AGENTD_ATTENTION_BINARY" ]] || {
-  echo "package release: optional attention binary is not executable: $AGENTD_ATTENTION_BINARY" >&2
-  exit 1
-}
 
 AGENTD_CARGO_VERSION=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$AGENTD_REPO_ROOT/Cargo.toml")
 [[ "$AGENTD_CARGO_VERSION" == "$AGENTD_RELEASE_VERSION" ]] || {
@@ -69,17 +66,35 @@ AGENTD_BINARY_VERSION=$("$AGENTD_BINARY" --version)
   echo "package release: binary reports '$AGENTD_BINARY_VERSION', expected 'agentd $AGENTD_RELEASE_VERSION'" >&2
   exit 1
 }
-AGENTD_ATTENTION_BINARY_VERSION=$("$AGENTD_ATTENTION_BINARY" --version)
-[[ "$AGENTD_ATTENTION_BINARY_VERSION" == "agentd-attention $AGENTD_RELEASE_VERSION" ]] || {
-  echo "package release: optional attention binary reports '$AGENTD_ATTENTION_BINARY_VERSION', expected 'agentd-attention $AGENTD_RELEASE_VERSION'" >&2
-  exit 1
+
+agentd_attention_omit() {
+  printf 'package release: warning: optional attention payload omitted: %s\n' "$1" >&2
 }
+
+if [[ ! -x "$AGENTD_ATTENTION_BINARY" ]]; then
+  agentd_attention_omit "binary is absent or not executable"
+elif [[ ! -f "$AGENTD_REPO_ROOT/docs/agentd-attention.md" || ! -r "$AGENTD_REPO_ROOT/docs/agentd-attention.md" \
+  || ! -f "$AGENTD_REPO_ROOT/packaging/systemd/agentd-attention.service" \
+  || ! -r "$AGENTD_REPO_ROOT/packaging/systemd/agentd-attention.service" ]]; then
+  agentd_attention_omit "invocation documentation or service unit is unavailable"
+elif ! command -v timeout >/dev/null 2>&1; then
+  agentd_attention_omit "timeout utility is unavailable for the optional binary check"
+else
+  if AGENTD_ATTENTION_BINARY_VERSION=$(timeout --signal=TERM --kill-after=1s 5s \
+    "$AGENTD_ATTENTION_BINARY" --version 2>&1); then
+    if [[ "$AGENTD_ATTENTION_BINARY_VERSION" == "agentd-attention $AGENTD_RELEASE_VERSION" ]]; then
+      AGENTD_INCLUDE_ATTENTION=true
+    else
+      agentd_attention_omit "binary reports '$AGENTD_ATTENTION_BINARY_VERSION', expected 'agentd-attention $AGENTD_RELEASE_VERSION'"
+    fi
+  else
+    agentd_attention_omit "binary version check failed: $AGENTD_ATTENTION_BINARY_VERSION"
+  fi
+fi
 
 for AGENTD_REQUIRED in \
   README.md \
-  docs/agentd-attention.md \
   packaging/systemd/agentd.service \
-  packaging/systemd/agentd-attention.service \
   skills/agentd/SKILL.md; do
   [[ -f "$AGENTD_REPO_ROOT/$AGENTD_REQUIRED" ]] || {
     echo "package release: required file is missing: $AGENTD_REQUIRED" >&2
@@ -110,17 +125,22 @@ printf 'source_date_epoch=%s\n' "$AGENTD_SOURCE_DATE_EPOCH"
 printf 'archive=%s\n' "$AGENTD_ARCHIVE_NAME"
 printf 'mode=0755 path=%s/\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0755 path=%s/agentd\n' "$AGENTD_PACKAGE_NAME"
-printf 'mode=0755 path=%s/agentd-attention\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0644 path=%s/README.md\n' "$AGENTD_PACKAGE_NAME"
-printf 'mode=0755 path=%s/docs/\n' "$AGENTD_PACKAGE_NAME"
-printf 'mode=0644 path=%s/docs/agentd-attention.md\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0755 path=%s/packaging/\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0755 path=%s/packaging/systemd/\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0644 path=%s/packaging/systemd/agentd.service\n' "$AGENTD_PACKAGE_NAME"
-printf 'mode=0644 path=%s/packaging/systemd/agentd-attention.service\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0755 path=%s/skills/\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0755 path=%s/skills/agentd/\n' "$AGENTD_PACKAGE_NAME"
 printf 'mode=0644 path=%s/skills/agentd/SKILL.md\n' "$AGENTD_PACKAGE_NAME"
+if [[ "$AGENTD_INCLUDE_ATTENTION" == true ]]; then
+  printf 'optional_attention=included\n'
+  printf 'mode=0755 path=%s/agentd-attention\n' "$AGENTD_PACKAGE_NAME"
+  printf 'mode=0755 path=%s/docs/\n' "$AGENTD_PACKAGE_NAME"
+  printf 'mode=0644 path=%s/docs/agentd-attention.md\n' "$AGENTD_PACKAGE_NAME"
+  printf 'mode=0644 path=%s/packaging/systemd/agentd-attention.service\n' "$AGENTD_PACKAGE_NAME"
+else
+  printf 'optional_attention=omitted\n'
+fi
 
 if [[ "$AGENTD_DRY_RUN" == true ]]; then
   exit 0
@@ -136,16 +156,18 @@ agentd_cleanup() {
 trap agentd_cleanup EXIT
 
 install -Dm755 "$AGENTD_BINARY" "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/agentd"
-install -Dm755 "$AGENTD_ATTENTION_BINARY" "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/agentd-attention"
 install -Dm644 "$AGENTD_REPO_ROOT/README.md" "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/README.md"
-install -Dm644 "$AGENTD_REPO_ROOT/docs/agentd-attention.md" \
-  "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/docs/agentd-attention.md"
 install -Dm644 "$AGENTD_REPO_ROOT/packaging/systemd/agentd.service" \
   "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/packaging/systemd/agentd.service"
-install -Dm644 "$AGENTD_REPO_ROOT/packaging/systemd/agentd-attention.service" \
-  "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/packaging/systemd/agentd-attention.service"
 install -Dm644 "$AGENTD_REPO_ROOT/skills/agentd/SKILL.md" \
   "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/skills/agentd/SKILL.md"
+if [[ "$AGENTD_INCLUDE_ATTENTION" == true ]]; then
+  install -Dm755 "$AGENTD_ATTENTION_BINARY" "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/agentd-attention"
+  install -Dm644 "$AGENTD_REPO_ROOT/docs/agentd-attention.md" \
+    "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/docs/agentd-attention.md"
+  install -Dm644 "$AGENTD_REPO_ROOT/packaging/systemd/agentd-attention.service" \
+    "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME/packaging/systemd/agentd-attention.service"
+fi
 find "$AGENTD_STAGE_ROOT/$AGENTD_PACKAGE_NAME" -type d -exec chmod 0755 {} +
 
 tar \

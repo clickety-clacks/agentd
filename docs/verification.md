@@ -8,26 +8,26 @@ cargo test --test integration
 cargo test --test release
 ```
 
-After code review, run `scripts/real-smoke.sh` on the unchanged commit. The
-script requires real authenticated Codex and Claude installations, `strace`,
-and a systemd user manager.
+`scripts/real-smoke.sh` is an optional diagnostic on an unchanged commit, not a
+product acceptance or release gate. It requires authenticated Codex and Claude
+installations, `strace`, and a systemd user manager.
 
 | Acceptance | Proof |
 | --- | --- |
-| A1 | The integration suite checks four sibling procfs roots, helper collapse, working-directory filtering, UID filtering, cross-UID ancestry, root promotion, and activity reset. The real smoke supplies three genuine Codex processes and one genuine Claude process in one directory. |
+| A1 | The integration suite checks four sibling procfs roots, helper collapse, working-directory filtering, UID filtering, cross-UID ancestry, root promotion, and activity reset. The optional smoke can supply three genuine Codex processes and one genuine Claude process in one directory. |
 | A2 | State and protocol unit tests check hook-only enrichment, unknown identities, equal-time no-op claims, removal ordering, and scan/activity carry. The integration suite exercises the silent activity CLI. |
-| A3 | The integration suite measures real procfs addition and removal below two seconds. The real smoke records genuine-harness discovery and exit milliseconds. |
+| A3 | The integration suite measures real procfs addition and removal below two seconds. The optional smoke records genuine-harness discovery and exit milliseconds. |
 | A4 | The PID-reuse unit test replaces one start time with another in one commit and proves that the activity claim is discarded. |
 | A5 | Scanner unit tests inject enumeration, status, cwd, and ancestry failures and check total typed uncertainty. |
 | A6 | The state seam owns snapshot replacement, subscriber registration, and activity mutation under one lock. Unit tests check timestamp-only scans, scan/activity interleaving, reason precedence, and removal/activity ordering. |
 | A7 | A subscriber slot is structurally one optional pending frame. One unit test offers 1,000 frames and observes only the newest. A server-lifetime regression proves that the already-sent initial frame is released before the changed-frame loop. The server configures one fixed socket send-buffer bound. |
 | A8 | Strict-parser unit tests cover exact fields and duplicate keys. Integration tests cover every closed error class and both byte-limit boundaries. |
 | A9 | Unit tests check exact degraded-empty human output. Integration tests execute JSON inspection and silent successful activity. |
-| A10 | Integration tests check the fixed unit contract and graceful SIGTERM cleanup. The real smoke installs and enables the unit, records systemd's expanded `ExecStart`, asserts the absolute binary followed by `daemon` with no socket argument, checks mode `0600`, forces an unsuccessful daemon exit, observes systemd restart with a new instance, and measures stop cleanup. |
+| A10 | Integration tests check the fixed unit contract and graceful SIGTERM cleanup. The optional smoke can inspect systemd's expanded `ExecStart`, mode `0600`, restart behavior, and stop cleanup. |
 | A11 | Integration tests exercise stale-socket replacement and refusal without mutation for regular files and live listeners. The owner check is enforced at the same startup seam. |
-| A12 | The runtime has one Unix listener and reads only procfs stat, status, and cwd. The real smoke keeps point-in-time socket inventories and also runs the installed binary under `strace` across a scheduled procfs scan and an accepted activity request. It retains the trace, asserts Unix transport and procfs access, and rejects any `AF_INET` or `AF_INET6` socket or connect. It also searches frames, CLI output, stderr, and the service journal for command-line and environment sentinels. |
-| A13 | A committed fixture replays stat, status UID, harness, parent, start-time, and cwd fields captured from three real Codex and one real Claude process. The real smoke captures the shared-cwd processes and runs the ignored captured-procfs replay test against those exact bytes. |
-| A14 | The README defines the unit, integration, and real-smoke commands. The real smoke records the commit, command, socket path, instance IDs, identities, deadline measurements, logs, and teardown. |
+| A12 | The runtime has one Unix listener and reads only procfs stat, status, and cwd. The optional smoke can capture socket inventories and a `strace` of the daemon, then check transport and private-data sentinels. |
+| A13 | A committed fixture replays stat, status UID, harness, parent, start-time, and cwd fields captured from real Codex and Claude processes. The optional smoke can capture comparable fixture input and run the ignored replay test. |
+| A14 | The README defines the unit and integration commands. Optional smoke output records its command, identities, measurements, logs, and teardown for diagnosis. |
 | A15 | Injected-view and cycle unit tests cover changed parent IDs, finite repeated-PID traversal, typed `process_raced` issues, retained unknown identities, and omitted new identities. |
 
 ## Version 1.1 amendment
@@ -37,7 +37,7 @@ The v1.1 amendment preserves every base gate and adds these proofs:
 | Acceptance | Proof |
 | --- | --- |
 | A1 | Library tests run install and uninstall twice against Claude and Codex fixtures with unrelated root values, events, groups, handlers, and ordered arrays. They prove exact-one canonical declarations after install, byte identity on the second operation, exact-owned removal after an executable move, preserved unrelated order, retained hook files and root `hooks` objects, and byte-identical Codex `config.toml`. The no-follow regression proves that a symlink target is refused without changing its referent. |
-| A2 | After independent review, one real Gibson tmux acceptance follows the release README on the unchanged candidate. It records the exact product and spec commits, README lines, Claude and Codex versions, Codex feature output, tmux sessions, process identities, install output, hook-file hashes, `active`/`needs_attention`/`idle` frames, socket-unavailable diagnostics and elapsed times, repeated uninstall hashes, Codex trust ownership, and teardown. It retains no hook payload or credential. |
+| A2 | An optional post-review diagnostic can follow the release README in a real tmux session on an unchanged candidate. It records observed versions, process identities, activity frames, socket-unavailable behavior, and teardown without retaining hook payloads or credentials. |
 
 Unit and integration regressions also prove the closed `needs_attention` wire and
 CLI value, exact Claude and Codex event mappings, same-harness ancestor collapse
@@ -60,15 +60,15 @@ The Linux integration suite starts an isolated daemon and real procfs-discovered
 process. It proves all four JSON fields, exact name set and identical-set no-op,
 mode-`0600` persistence, same-boot daemon-restart retention with revision 1 and
 unknown activity, stale-identity refusal, clear and identical-clear no-op, and
-registry privacy. It does not replace the post-review real-host matrix.
+registry privacy. An optional real-host diagnostic can supplement these checks;
+it is not a required acceptance matrix.
 
-After exact-commit code review, the unchanged candidate runs the full v0.2 gates
-and a Gibson/Osanwe matrix. Each host records the candidate commit and binary
-hash, kernel, tmux version, boot ID, tick rate, instance IDs, and exact process
-identities. It proves tmux and non-tmux roots, independent timestamp arithmetic,
-name lifecycle, an isolated PATH-without-tmux daemon, restart behavior, retained
-socket/service contracts, private sentinel absence, and teardown. This repository
-stage does not install or release the candidate.
+The optional post-review diagnostic can record the candidate commit and binary
+hash, kernel, tmux version, boot ID, tick rate, instance IDs, and process
+identities. It can observe tmux and non-tmux roots, name lifecycle, restart
+behavior, socket/service contracts, private sentinel absence, and teardown.
+These observations supplement the automated gates and do not install or release
+the candidate.
 
 The real smoke writes under `target/agentd-smoke/<UTC-run-id>/`. Its key files
 are `commit.txt`, `command.txt`, `socket-path.txt`, `exec-start.txt`, `instance-ids.txt`,
@@ -79,13 +79,13 @@ dynamic `network-trace.log`, `network-trace-window.txt`,
 
 ## Optional bridge package behavior
 
-The optional bridge package test proves that release packaging validates the
-bridge binary and archive versions, includes the executable bridge, its
-current invocation documentation, and its optional service unit. The packager
-emits `SHA256SUMS` for downstream artifact-integrity checks; that receipt and
-archive byte reproducibility are not product acceptance gates. Operator-skill
-wording, install-authorization text, and site-data scanning are not product
-acceptance gates.
+The package behavior tests prove that a core archive succeeds and remains
+usable when the optional bridge binary is absent, with a warning and no bridge
+files. When the bridge binary, matching version, invocation documentation, and
+service unit are available, packaging validates and includes those files and
+the test runs the extracted bridge to confirm its `--version` output. The
+packager emits `SHA256SUMS` for downstream artifact-integrity checks; that
+receipt and archive byte reproducibility are not product acceptance gates.
 
 The release workflow also requires the pushed tag, crate version, and package
 version to agree. This is a publication identity safeguard against mislabeled
@@ -112,7 +112,7 @@ daemon or watch protocol:
 | AB-7 | The bridge uses published process identity/activity/name/harness/tmux fields and emits no message body or pane data. | `message_uses_exact_identity_title_priority_and_open_command_without_body` |
 | AP-1 | A post is sent as a v1 newline-delimited message frame with a request reference and no body. | `attention_transport_sends_versioned_line_and_waits_for_matching_ack` |
 | AP-2 | The client accepts a matching acknowledgment; subscription also reads the initial message snapshot after its acknowledgment. | `attention_transport_sends_versioned_line_and_waits_for_matching_ack`; `subscribe_uses_empty_set_and_reads_the_daemon_snapshot` |
-| Packaging | Release packaging validates versions, ships the optional executable and its invocation docs, and runs the extracted bridge to confirm its packaged `--version` output. | `optional_attention_archive_contains_binary_docs_and_service_unit` |
+| Packaging | A core archive is usable with the bridge omitted; when the bridge payload is available and matches the release version, packaging includes its executable, invocation docs, and service unit. | `core_archive_succeeds_when_optional_attention_binary_is_absent`; `optional_attention_archive_contains_binary_docs_and_service_unit` |
 
 These tests use published-snapshot fixtures and a protocol peer. They do not
 claim interoperability with the separately maintained attention daemon; that

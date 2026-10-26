@@ -16,13 +16,13 @@ fn agentd_attention_binary() -> PathBuf {
     root().join("target/debug/agentd-attention")
 }
 
-fn package(output: &Path) -> std::process::Output {
+fn package(output: &Path, attention_binary: &Path) -> std::process::Output {
     let mut command = Command::new(root().join("scripts/package-release.sh"));
     command
         .arg("--binary")
         .arg(agentd_binary())
         .arg("--attention-binary")
-        .arg(agentd_attention_binary())
+        .arg(attention_binary)
         .arg("--output-dir")
         .arg(output)
         .args(["--source-date-epoch", "0"]);
@@ -33,13 +33,16 @@ fn package(output: &Path) -> std::process::Output {
 fn optional_attention_archive_contains_binary_docs_and_service_unit() {
     let scratch = root()
         .join("target")
-        .join(format!("release-package-test-{}", std::process::id()));
+        .join(format!(
+            "release-package-test-{}-with-attention",
+            std::process::id()
+        ));
     let first = scratch.join("first");
     if scratch.exists() {
         fs::remove_dir_all(&scratch).unwrap();
     }
 
-    let result = package(&first);
+    let result = package(&first, &agentd_attention_binary());
     assert!(
         result.status.success(),
         "{}",
@@ -141,6 +144,99 @@ fn optional_attention_archive_contains_binary_docs_and_service_unit() {
     assert_eq!(
         service_unit.stdout,
         fs::read(root().join("packaging/systemd/agentd-attention.service")).unwrap()
+    );
+
+    fs::remove_dir_all(&scratch).unwrap();
+}
+
+#[test]
+fn core_archive_succeeds_when_optional_attention_binary_is_absent() {
+    let scratch = root().join("target").join(format!(
+        "release-package-test-{}-without-attention",
+        std::process::id()
+    ));
+    let output_dir = scratch.join("archive");
+    let missing_attention = scratch.join("missing-agentd-attention");
+    if scratch.exists() {
+        fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    let result = package(&output_dir, &missing_attention);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("warning: optional attention payload omitted"));
+
+    let archive = fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "gz"))
+        .unwrap();
+    let package_name = archive
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .strip_suffix(".tar.gz")
+        .unwrap()
+        .to_owned();
+    let listing = Command::new("tar")
+        .arg("-tzf")
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert!(listing.status.success());
+    let listing = String::from_utf8(listing.stdout).unwrap();
+    for entry in [
+        format!("{package_name}/agentd"),
+        format!("{package_name}/README.md"),
+        format!("{package_name}/packaging/systemd/agentd.service"),
+        format!("{package_name}/skills/agentd/SKILL.md"),
+    ] {
+        assert!(
+            listing.lines().any(|line| line == entry.as_str()),
+            "missing core entry {entry}"
+        );
+    }
+    for entry in [
+        format!("{package_name}/agentd-attention"),
+        format!("{package_name}/docs/agentd-attention.md"),
+        format!("{package_name}/packaging/systemd/agentd-attention.service"),
+    ] {
+        assert!(
+            !listing.lines().any(|line| line == entry.as_str()),
+            "unexpected optional entry {entry}"
+        );
+    }
+
+    let extracted = scratch.join("extracted");
+    fs::create_dir(&extracted).unwrap();
+    let extraction = Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extracted)
+        .output()
+        .unwrap();
+    assert!(
+        extraction.status.success(),
+        "{}",
+        String::from_utf8_lossy(&extraction.stderr)
+    );
+    let packaged_agentd = Command::new(extracted.join(&package_name).join("agentd"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        packaged_agentd.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packaged_agentd.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(packaged_agentd.stdout).unwrap(),
+        format!("agentd {VERSION}\n")
     );
 
     fs::remove_dir_all(&scratch).unwrap();
