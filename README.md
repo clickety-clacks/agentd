@@ -389,15 +389,17 @@ skill.
 
 ## Development
 
-Rust 1.97 or later is required. Build both programs from a source checkout:
+Rust 1.97 or later is required. Build Agentd from a source checkout:
 
 ```sh
-cargo build --release --locked --bins
+cargo build --release --locked --bin agentd
 ```
 
-The base binary is `target/release/agentd`. The separate optional local bridge
-is `target/release/agentd-attention`; see [its package and invocation notes](docs/agentd-attention.md).
-For deployments, use a published release.
+The optional local bridge is a separate binary at
+`target/release/agentd-attention`; build it with
+`cargo build --release --locked --bin agentd-attention`. See [its package and
+invocation notes](docs/agentd-attention.md). For deployments, use a published
+release.
 
 ## Releasing
 
@@ -411,28 +413,32 @@ when a matching `v*` tag is pushed.
 3. Tag that commit `vX.Y.Z` with the matching version and push the tag.
 
 CI checks tag, crate, and package version agreement; runs locked tests; builds
-both binaries; and packages them once. It publishes the archive and
+the release binaries; and packages them once. It publishes the archive and
 `SHA256SUMS` as release assets.
 
 ### Check packaging locally
 
-Build the locked release binaries, inspect the package plan, then create the
-archive and its checksum receipt:
+Build Agentd, inspect the package plan, then create the archive and its checksum
+receipt:
 
 ```sh
-cargo build --release --locked --bins
+cargo build --release --locked --bin agentd
 scripts/package-release.sh --dry-run
 scripts/package-release.sh
 ```
 
+Build `agentd-attention` separately when you want it included. If its binary,
+matching version, invocation notes, or service template are unavailable, the
+packager warns and creates a core archive without the bridge.
+
 The package command writes
 `target/release-assets/agentd-0.3.4-<rust-host>.tar.gz` and
-`target/release-assets/SHA256SUMS`. The archive contains `agentd`, the optional
-`agentd-attention` binary and service template, this README, bridge invocation
-notes, the base systemd user unit, and `skills/agentd/SKILL.md`. Standard Agentd
-installation still installs only the base daemon; downstream installers choose
-whether to install and enable the bridge. The bridge binary is executable, and
-the package includes its invocation notes and optional service template.
+`target/release-assets/SHA256SUMS`. Every archive contains `agentd`, this README,
+the base systemd user unit, and `skills/agentd/SKILL.md`. When the optional
+bridge binary and its matching invocation notes and service template are
+available, the archive also contains those files. Standard Agentd installation
+installs only the base daemon; downstream installers choose whether to install
+and enable the bridge.
 
 Packaging creates local v0.3.4 candidate files only. It does not publish a
 release, install Agentd, install the operator skill, or change an earlier
@@ -446,31 +452,26 @@ Run each gate from a clean Linux checkout:
 cargo test --lib
 cargo test --test integration
 cargo test --test release
-scripts/real-smoke.sh
 ```
 
-The base real smoke requires authenticated `codex` and `claude` commands, `strace`,
+`scripts/real-smoke.sh` is an optional diagnostic, not a product acceptance or
+release gate. It requires authenticated `codex` and `claude` commands, `strace`,
 a working systemd user manager, and provider access. It starts three Codex
-processes and one Claude process in one dedicated directory. It captures their
-real procfs fixtures, checks hookless discovery and activity enrichment,
-records the expanded installed service command, and dynamically traces the
-installed daemon's local-only transport. It tears down the processes and
-service. It writes its evidence directory path on success.
+processes and one Claude process in one dedicated directory, captures procfs
+fixtures, checks discovery and activity enrichment, traces the daemon's local
+transport, and tears down its processes and service.
 
-After independent review of an unchanged v0.3.1 release candidate, the release
-acceptance also follows both integration procedures above in real Gibson tmux
-sessions. It
-captures the replacement process identities and the `active`, `needs_attention`,
-and `idle` sequence for each harness. It also checks fail-open behavior with the
-socket unavailable, before-and-after hook-file hashes, Codex feature output and
-trust ownership, repeated-uninstall byte identity, and complete teardown. The
-acceptance capture retains no hook payload or credential.
+The optional smoke can also observe the integration procedures in real tmux
+sessions. It captures replacement process identities and the `active`,
+`needs_attention`, and `idle` sequence for each harness, checks behavior with
+the socket unavailable, and records teardown. It retains no hook payload or
+credential.
 
-The v0.3 acceptance additionally checks tmux and non-tmux records, exact name
+Automated v0.3 tests additionally check tmux and non-tmux records, exact name
 set/no-op/restart/clear/stale behavior, independent start-time arithmetic,
 missing-tmux fail-open behavior, additive JSON fields, human rendering, and
 absence of private prompt, command, environment, screen, and transcript
-sentinels on Gibson and Osanwe.
+sentinels.
 
 The optional attention bridge tests cover sender and episode identity, title
 selection, tmux open argv, omission of message bodies, complete-scan clearing,
@@ -481,7 +482,7 @@ interoperability with the independently built attention daemon is a separate
 cross-project acceptance result.
 
 [The verification map](docs/verification.md) links each acceptance case to its
-automated or real-host proof and lists the real-smoke evidence files.
+automated proof and lists the optional real-smoke evidence files.
 
 ## Scope
 
