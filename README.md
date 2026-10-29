@@ -6,8 +6,8 @@ running Claude Code and Codex agents. It discovers their processes through
 or has unknown activity. Activity comes from optional hooks, never from CPU
 usage or elapsed time.
 
-The source tree targets v0.3.4; the latest published release remains v0.3.3
-until the matching tag and archive are published.
+The source tree targets v0.3.4. The installation example below pins v0.3.3;
+choose a version that is available from [GitHub Releases](https://github.com/clickety-clacks/agentd/releases).
 
 Use `agentd list` for a snapshot or `agentd watch --json` to subscribe to changes.
 Each update contains the complete current roster. Agentd uses a local Unix

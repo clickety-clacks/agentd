@@ -31,7 +31,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            target/release-assets/*.tar.gz target/release-assets/SHA256SUMS \
-            --title "Agentd $GITHUB_REF_NAME" \
-            --notes "CI-built release from $GITHUB_SHA. Deterministic archive from scripts/package-release.sh; verify against SHA256SUMS."
+          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes_file" ]; then
+            gh release create "$GITHUB_REF_NAME" \
+              target/release-assets/*.tar.gz target/release-assets/SHA256SUMS \
+              --title "Agentd $GITHUB_REF_NAME" \
+              --notes-file "$notes_file"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              target/release-assets/*.tar.gz target/release-assets/SHA256SUMS \
+              --title "Agentd $GITHUB_REF_NAME" \
+              --notes "CI-built release from $GITHUB_SHA. Deterministic archive from scripts/package-release.sh; verify against SHA256SUMS."
+          fi
