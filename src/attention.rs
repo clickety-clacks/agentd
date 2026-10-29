@@ -991,6 +991,22 @@ impl Backoff {
 }
 
 #[cfg(test)]
+mod backoff_tests {
+    use super::Backoff;
+    use std::time::Duration;
+
+    #[test]
+    fn retry_backoff_grows_and_stays_within_the_five_second_cap() {
+        let mut backoff = Backoff::default();
+        let delays = (0..16).map(|_| backoff.next()).collect::<Vec<_>>();
+        let cap = Duration::from_secs(5);
+        assert!(delays.iter().all(|delay| !delay.is_zero() && *delay <= cap));
+        assert!(delays.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(delays.windows(2).any(|pair| pair[0] < pair[1]));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
