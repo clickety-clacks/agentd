@@ -830,7 +830,6 @@ def run_pair(
                 "new Agentd instance message was not left open")
         require(len(find_message(entries, foreign_sender, foreign_id)) == 1,
                 "instance reconciliation changed a foreign sender message")
-        wait_stream(feed, 3)
         report["checks"].append("AB-5 Agentd instance change posts the new identity and clears the old one")
 
         # Stop only the attention daemon. Do not inject a watch EOF: the bridge
@@ -850,8 +849,8 @@ def run_pair(
         first_disconnect_seen = wait_log_contains(
             bridge_entry, "attention daemon disconnected; retrying", first_outage_log_offset
         )
-        wait_stream(feed, 4)
-        require(not (feed / "stream-3" / "stop").exists(),
+        wait_stream(feed, 3)
+        require(not (feed / "stream-2" / "stop").exists(),
                 "fixture injected a watch stop during the daemon-only outage")
         first_socket_retry_seen = wait_log_contains(
             bridge_entry, "local attention socket unavailable at", first_outage_log_offset
@@ -878,7 +877,7 @@ def run_pair(
         check_persistence(entries, local_b, "needs_attention@300", foreign_sender, foreign_id)
         report["checks"].append("AD-11 daemon restart preserves the open local and foreign messages")
 
-        emit_snapshot(feed, 4, 1, snapshot(
+        emit_snapshot(feed, 3, 1, snapshot(
             2, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 400
         ), timeout=max(0.0, first_reconnect_deadline - time.monotonic()))
         fourth_envelope, fourth = expect_delivery(
@@ -896,13 +895,13 @@ def run_pair(
         report["daemonReconnects"] = [{
             "elapsedFromSocketReadySeconds": round(first_reconnect_seconds, 3),
             "messageId": "needs_attention@400",
-            "watchStream": 4,
+            "watchStream": 3,
         }]
         report["checks"].append(
             "AB-5 daemon-only loss is observed, retried while Agentd input remains unstopped, "
             "and local posting resumes within the capped backoff tolerance"
         )
-        emit_snapshot(feed, 4, 2, snapshot(
+        emit_snapshot(feed, 3, 2, snapshot(
             3, "fedcba9876543210fedcba9876543210", "complete", "active", 401
         ))
         expect_lifecycle(observer, local_b, "needs_attention@400", "cleared")
@@ -918,7 +917,7 @@ def run_pair(
         # Answer a bridge-owned episode through the daemon, then restart the
         # daemon while the controlled Agentd input remains available. The
         # answered id must remain closed and a duplicate post must not redeliver.
-        emit_snapshot(feed, 4, 3, snapshot(
+        emit_snapshot(feed, 3, 3, snapshot(
             4, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 500
         ))
         answered_envelope, answered = expect_delivery(
@@ -957,8 +956,8 @@ def run_pair(
         second_disconnect_seen = wait_log_contains(
             bridge_entry, "attention daemon disconnected; retrying", second_outage_log_offset
         )
-        wait_stream(feed, 5)
-        require(not (feed / "stream-4" / "stop").exists(),
+        wait_stream(feed, 4)
+        require(not (feed / "stream-3" / "stop").exists(),
                 "fixture injected a watch stop during the answered-state daemon outage")
         second_socket_retry_seen = wait_log_contains(
             bridge_entry, "local attention socket unavailable at", second_outage_log_offset
@@ -1012,7 +1011,7 @@ def run_pair(
             "AD-6 answered duplicate is acknowledged without redelivery and remains closed"
         )
 
-        emit_snapshot(feed, 5, 1, snapshot(
+        emit_snapshot(feed, 4, 1, snapshot(
             5, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 600
         ), timeout=max(0.0, second_reconnect_deadline - time.monotonic()))
         reconnected_envelope, reconnected = expect_delivery(
@@ -1025,7 +1024,7 @@ def run_pair(
                 f"capped backoff tolerance: {second_reconnect_seconds:.3f}s")
         require(reconnected_envelope.get("as") == "knock" and "body" not in reconnected,
                 "post-restart delivery did not preserve knock/body privacy")
-        emit_snapshot(feed, 5, 2, snapshot(
+        emit_snapshot(feed, 4, 2, snapshot(
             6, "fedcba9876543210fedcba9876543210", "complete", "active", 601
         ))
         expect_lifecycle(observer, local_b, "needs_attention@600", "cleared")
@@ -1039,7 +1038,7 @@ def run_pair(
         report["daemonReconnects"].append({
             "elapsedFromSocketReadySeconds": round(second_reconnect_seconds, 3),
             "messageId": "needs_attention@600",
-            "watchStream": 5,
+            "watchStream": 4,
         })
         report["checks"].append(
             "AB-3/5 post-restart clear and foreign-message isolation remain intact"
