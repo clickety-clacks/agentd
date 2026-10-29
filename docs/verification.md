@@ -118,14 +118,17 @@ These unit tests use published-snapshot fixtures and a protocol peer. They do
 not establish interoperability with the separately maintained attention
 daemon. The optional exact-pair check in
 `tests/attention-pair/README.md` connects the bridge binary to the daemon binary
-over the local Unix socket and covers persisted snapshots, duplicate posts,
-supersession, instance changes, clears, and reconnect within the specified
-retry bound. Its input manifest records both source trees, build commands and
-settings, and executable hashes. The Agentd binary must match the clean
-checkout; the daemon identity is recorded and hash-checked without treating a
-source hash as proof of a binary build. Run that check only with the exact pair
-and an isolated test environment. It is separate from core Agentd acceptance
-and does not make the optional bridge a dependency of the core archive.
+over the local Unix socket and covers persisted open and answered episodes,
+duplicate posts, supersession, instance changes, clears, and daemon-only loss
+and reconnect while the controlled Agentd input remains unstopped. It records
+the observed disconnect/retry and elapsed time from private-socket readiness to
+a subsequent local post; it does not require a fixed retry-delay schedule. Its
+input manifest records both source trees, build commands and settings, and
+executable hashes. The Agentd binary must match the clean checkout; the daemon
+identity is recorded and hash-checked without treating a source hash as proof
+of a binary build. Run that check only with the exact pair and an isolated test
+environment. It is separate from core Agentd acceptance and does not make the
+optional bridge a dependency of the core archive.
 
 `scripts/run-candidate-tests.sh` is an optional helper for already-built Linux
 test artifacts; Linux procfs is a product capability exercised by Agentd's

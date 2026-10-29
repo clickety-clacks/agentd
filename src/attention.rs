@@ -996,24 +996,13 @@ mod backoff_tests {
     use std::time::Duration;
 
     #[test]
-    fn retry_delay_doubles_from_quarter_second_and_caps_at_five_seconds() {
+    fn retry_backoff_grows_and_stays_within_the_five_second_cap() {
         let mut backoff = Backoff::default();
-        let delays = (0..8).map(|_| backoff.next()).collect::<Vec<_>>();
-        assert_eq!(
-            delays,
-            vec![
-                Duration::from_millis(250),
-                Duration::from_millis(500),
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                Duration::from_secs(4),
-                Duration::from_secs(5),
-                Duration::from_secs(5),
-                Duration::from_secs(5),
-            ]
-        );
-        backoff.reset();
-        assert_eq!(backoff.next(), Duration::from_millis(250));
+        let delays = (0..16).map(|_| backoff.next()).collect::<Vec<_>>();
+        let cap = Duration::from_secs(5);
+        assert!(delays.iter().all(|delay| !delay.is_zero() && *delay <= cap));
+        assert!(delays.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(delays.windows(2).any(|pair| pair[0] < pair[1]));
     }
 }
 

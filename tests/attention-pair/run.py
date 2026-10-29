@@ -38,6 +38,12 @@ class PairFailure(RuntimeError):
     pass
 
 
+class RunnerInterrupted(PairFailure):
+    def __init__(self, signum: int):
+        super().__init__(f"runner interrupted by signal {signum}")
+        self.signum = signum
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise PairFailure(message)
@@ -108,7 +114,9 @@ def validate_component(
     }
 
 
-def read_manifest(path: pathlib.Path, input_root: pathlib.Path) -> tuple[dict, dict]:
+def read_manifest(
+    path: pathlib.Path, input_root: pathlib.Path
+) -> tuple[dict, dict[str, tuple[pathlib.Path, dict[str, Any]]], str]:
     require(path.is_absolute(), "manifest path must be absolute")
     require(not path.is_symlink(), "manifest path must not be a symlink")
     resolved = path.resolve(strict=True)
@@ -143,11 +151,11 @@ def read_manifest(path: pathlib.Path, input_root: pathlib.Path) -> tuple[dict, d
         text=True,
     ).stdout
     require(not dirty, "Agentd checkout must be clean at the recorded commit")
-    return manifest, {
+    components = {
         "agentd": (agentd_path, agentd_record),
         "attentiond": (attentiond_path, attentiond_record),
-        "manifestSha256": sha256_file(resolved),
     }
+    return manifest, components, sha256_file(resolved)
 
 
 def ensure_private_directory(path: pathlib.Path, label: str) -> None:
@@ -322,18 +330,21 @@ class FrameConnection:
             self.buffer.extend(chunk)
         raise TimeoutError("timed out waiting for an attention frame")
 
-    def request(self, frame: dict) -> dict:
+    def request(
+        self, frame: dict, *, allow_error: bool = False, timeout: float = WAIT_SECONDS
+    ) -> dict:
         reference = f"pair-{self.next_ref}"
         self.next_ref += 1
         outbound = dict(frame)
         outbound["ref"] = reference
         self.send(outbound)
         deferred: list[dict] = []
+        deadline = time.monotonic() + timeout
         try:
             while True:
-                response = self.next_frame()
+                response = self.next_frame(max(0.0, deadline - time.monotonic()))
                 if response.get("ref") == reference and response.get("type") in ("ok", "error"):
-                    require(response.get("type") == "ok",
+                    require(response.get("type") == "ok" or allow_error,
                             f"attention daemon rejected a fixture request: {response}")
                     require(response.get("v") == 1, "acknowledgment did not use protocol version 1")
                     return response
@@ -344,12 +355,16 @@ class FrameConnection:
             if deferred:
                 self.pending = deferred + self.pending
 
-    def subscribe_snapshot(self) -> list[dict]:
-        self.request({"v": 1, "type": "subscribe", "sender_ids": []})
+    def subscribe_snapshot(self, timeout: float = WAIT_SECONDS) -> list[dict]:
+        deadline = time.monotonic() + timeout
+        self.request(
+            {"v": 1, "type": "subscribe", "sender_ids": []},
+            timeout=max(0.0, deadline - time.monotonic()),
+        )
         deferred: list[dict] = []
         try:
             while True:
-                frame = self.next_frame()
+                frame = self.next_frame(max(0.0, deadline - time.monotonic()))
                 if frame.get("type") == "snapshot":
                     messages = frame.get("messages", [])
                     require(isinstance(messages, list), "subscription snapshot messages must be a list")
@@ -364,37 +379,85 @@ def start_child(
     name: str, command: list[str], environment: dict[str, str], log_path: pathlib.Path,
     children: list[dict],
 ) -> subprocess.Popen:
-    log = log_path.open("ab", buffering=0)
-    os.chmod(log_path, 0o600)
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=log,
-        env=environment,
-        start_new_session=True,
-        close_fds=True,
-    )
-    children.append({"name": name, "process": process, "log": log})
-    return process
-
-
-def stop_child(entry: dict, timeout: float = 5.0) -> int | None:
-    process = entry["process"]
-    if process.poll() is None:
+    blocked = {signal.SIGTERM, signal.SIGINT}
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+    try:
+        log = log_path.open("ab", buffering=0)
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            os.chmod(log_path, 0o600)
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                env=environment,
+                start_new_session=True,
+                close_fds=True,
+                preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_UNBLOCK, blocked),
+            )
+        except Exception:
+            log.close()
+            raise
+        children.append({"name": name, "process": process, "log": log,
+                         "cleanupResult": None})
+        return process
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def stop_child(entry: dict, timeout: float = 5.0) -> dict[str, Any]:
+    process = entry["process"]
+    cached = entry.get("cleanupResult")
+    if cached is not None and cached.get("processGroupStopped"):
+        return cached
+    errors: list[str] = []
+    try:
+        # The leader may have exited while a child in this owned session remains.
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(f"SIGTERM process group: {error}")
+    try:
+        if process.poll() is None:
+            process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError as error:
+        errors.append(f"wait after SIGTERM: {error}")
+
+    try:
+        stopped = wait_process_group_stopped(process.pid, timeout=timeout)
+    except OSError as error:
+        errors.append(f"check process group after SIGTERM: {error}")
+        stopped = False
+    if not stopped:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except OSError as error:
+            errors.append(f"SIGKILL process group: {error}")
         try:
-            return process.wait(timeout=timeout)
+            if process.poll() is None:
+                process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            return process.wait(timeout=timeout)
-    return process.returncode
+            errors.append("leader did not exit after SIGKILL")
+        except OSError as error:
+            errors.append(f"wait after SIGKILL: {error}")
+        try:
+            stopped = wait_process_group_stopped(process.pid, timeout=timeout)
+        except OSError as error:
+            errors.append(f"check process group after SIGKILL: {error}")
+            stopped = False
+    result = {
+        "exitCode": process.poll(),
+        "processGroupStopped": stopped,
+        "errors": errors,
+    }
+    if stopped:
+        entry["cleanupResult"] = result
+    return result
 
 
 def wait_process_group_stopped(process_group: int, timeout: float = 5.0) -> bool:
@@ -404,15 +467,19 @@ def wait_process_group_stopped(process_group: int, timeout: float = 5.0) -> bool
             os.killpg(process_group, 0)
         except ProcessLookupError:
             return True
+        except PermissionError:
+            return False
         time.sleep(0.02)
     try:
         os.killpg(process_group, 0)
     except ProcessLookupError:
         return True
+    except PermissionError:
+        return False
     return False
 
 
-def wait_socket(path: pathlib.Path, process: subprocess.Popen) -> None:
+def wait_socket(path: pathlib.Path, process: subprocess.Popen) -> float:
     deadline = time.monotonic() + WAIT_SECONDS
     while time.monotonic() < deadline:
         status = process.poll()
@@ -425,14 +492,36 @@ def wait_socket(path: pathlib.Path, process: subprocess.Popen) -> None:
                 require(directory.st_uid == os.getuid(), "attention socket directory owner mismatch")
                 require(directory.st_mode & 0o777 == 0o700,
                         "attention socket directory must be private to its owner")
-                return
+                return time.monotonic()
         except FileNotFoundError:
             pass
         time.sleep(0.02)
     raise PairFailure("private attention daemon socket did not become ready")
 
 
+def log_offset(entry: dict) -> int:
+    entry["log"].flush()
+    return pathlib.Path(entry["log"].name).stat().st_size
+
+
+def wait_log_contains(
+    entry: dict, needle: str, offset: int, timeout: float = WAIT_SECONDS
+) -> float:
+    path = pathlib.Path(entry["log"].name)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        content = path.read_bytes()[offset:].decode("utf-8", errors="replace")
+        if needle in content:
+            return time.monotonic()
+        status = entry["process"].poll()
+        require(status is None, f"{entry['name']} exited before logging {needle!r}: {status}")
+        time.sleep(0.02)
+    raise PairFailure(f"timed out waiting for {entry['name']} log entry {needle!r}")
+
+
 def wait_path(path: pathlib.Path, label: str, timeout: float = WAIT_SECONDS) -> None:
+    if path.exists():
+        return
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.exists():
@@ -441,8 +530,10 @@ def wait_path(path: pathlib.Path, label: str, timeout: float = WAIT_SECONDS) -> 
     raise PairFailure(f"timed out waiting for {label}")
 
 
-def snapshot_entries(connection: FrameConnection) -> list[dict]:
-    return connection.subscribe_snapshot()
+def snapshot_entries(
+    connection: FrameConnection, timeout: float = WAIT_SECONDS
+) -> list[dict]:
+    return connection.subscribe_snapshot(timeout)
 
 
 def find_message(entries: list[dict], sender: str, message_id: str) -> list[dict]:
@@ -457,13 +548,14 @@ def find_message(entries: list[dict], sender: str, message_id: str) -> list[dict
 def expect_delivery(
     connection: FrameConnection, sender: str, message_id: str,
     timeout: float = WAIT_SECONDS,
-) -> dict:
+) -> tuple[dict, dict]:
     frame = connection.next_frame(timeout)
     require(frame.get("type") == "delivery", f"expected delivery, received {frame}")
     message = frame.get("message", {})
+    require(isinstance(message, dict), f"delivery message must be an object: {frame}")
     require(message.get("sender_id") == sender, f"unexpected delivery sender: {message}")
     require(message.get("message_id") == message_id, f"unexpected delivery id: {message}")
-    return message
+    return frame, message
 
 
 def expect_lifecycle(
@@ -500,11 +592,14 @@ def feed_current(feed: pathlib.Path, value: dict) -> None:
     write_json_atomic(feed / "current.json", value)
 
 
-def emit_snapshot(feed: pathlib.Path, stream_number: int, sequence: int, value: dict) -> None:
+def emit_snapshot(
+    feed: pathlib.Path, stream_number: int, sequence: int, value: dict,
+    timeout: float = WAIT_SECONDS,
+) -> None:
     stream = feed / f"stream-{stream_number}"
     path = stream / f"{sequence}.json"
     write_json_atomic(path, value)
-    wait_path(stream / f"sent-{sequence}", f"snapshot {stream_number}/{sequence}")
+    wait_path(stream / f"sent-{sequence}", f"snapshot {stream_number}/{sequence}", timeout)
 
 
 def wait_stream(feed: pathlib.Path, stream_number: int) -> None:
@@ -535,15 +630,20 @@ def check_persistence(entries: list[dict], local_sender: str, local_id: str,
     require(len(entries) == 2, f"unexpected open messages after reconciliation: {entries}")
 
 
-def run_pair(args: argparse.Namespace, identities: dict) -> dict:
+def run_pair(
+    args: argparse.Namespace,
+    identities: dict[str, tuple[pathlib.Path, dict[str, Any]]],
+    manifest_sha256: str,
+) -> dict:
     require(sys.platform.startswith("linux"), "the pair fixture requires Linux")
     require(len(os.fsencode(args.scratch_parent / "ap-x" / "r" / "attention" / "attention.sock")) < 104,
             "scratch path is too long for a Unix socket; provide a shorter private parent")
-    scratch = pathlib.Path(tempfile.mkdtemp(prefix="ap-", dir=args.scratch_parent))
+    scratch: pathlib.Path | None = None
     children: list[dict] = []
     report: dict[str, Any] = {
         "schema": SCHEMA,
         "status": "failed",
+        "manifestSha256": manifest_sha256,
         "identities": {
             name: record for name, (_, record) in identities.items()
         },
@@ -574,8 +674,27 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
                                    "log": str(log_path)})
         return process
 
+    def child_entry(process: subprocess.Popen) -> dict:
+        for entry in children:
+            if entry["process"] is process:
+                return entry
+        raise PairFailure("could not find the runner-owned process entry")
+
     try:
+        blocked = {signal.SIGTERM, signal.SIGINT}
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+        try:
+            scratch = pathlib.Path(
+                tempfile.mkdtemp(prefix="ap-", dir=args.scratch_parent)
+            )
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         os.chmod(scratch, 0o700)
+        report["runtime"].update({
+            "runtimeDirectory": str(scratch / "r"),
+            "stateDirectory": str(scratch / "s"),
+            "scratchDirectory": str(scratch),
+        })
         runtime = scratch / "r"
         state = scratch / "s"
         home = scratch / "h"
@@ -586,12 +705,6 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
         feed = scratch / "f"
         for directory in (runtime, state, home, config, data, tmp, bin_dir, feed):
             directory.mkdir(mode=0o700)
-        report["runtime"].update({
-            "runtimeDirectory": str(runtime),
-            "stateDirectory": str(state),
-            "scratchDirectory": str(scratch),
-        })
-
         copied: dict[str, pathlib.Path] = {}
         for name, (source, record) in identities.items():
             destination = bin_dir / ("agentd-attention" if name == "agentd" else "attentiond")
@@ -632,8 +745,9 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
         poster.close()
         require(foreign_reply.get("type") == "ok" and foreign_reply.get("duplicate") is not True,
                 f"first post did not receive a successful acknowledgment: {foreign_reply}")
-        foreign = expect_delivery(observer, foreign_sender, foreign_id)
-        require(foreign.get("as") == "knock", "unsubscribed foreign message was not a knock")
+        foreign_envelope, foreign = expect_delivery(observer, foreign_sender, foreign_id)
+        require(foreign_envelope.get("as") == "knock",
+                "unsubscribed foreign message was not a knock")
         report["checks"].append("foreign message is retained as a knock")
 
         feed_current(feed, snapshot(1, "0123456789abcdef0123456789abcdef", "degraded",
@@ -649,14 +763,15 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
         emit_snapshot(feed, 1, 1, snapshot(
             2, "0123456789abcdef0123456789abcdef", "complete", "needs_attention", 100
         ))
-        first = expect_delivery(observer, local_a, "needs_attention@100")
+        first_envelope, first = expect_delivery(observer, local_a, "needs_attention@100")
         require(first.get("created_at") == 100 and first.get("title") == f"Pair target on {machine}",
                 f"initial message identity/content mismatch: {first}")
         require("body" not in first, "bridge message unexpectedly contains a body")
         require(first.get("open") == {
             "argv": ["tmux", "attach-session", "-t", "=pair-target"], "terminal": True
         }, f"tmux open argv mismatch: {first}")
-        require(first.get("as") == "knock", "empty subscription did not receive the local post as a knock")
+        require(first_envelope.get("as") == "knock",
+                "empty subscription did not receive the local post as a knock")
         report["checks"].append("AB-1/2 identity, title, timestamp, tmux argv, and body omission")
 
         duplicate_poster = FrameConnection.connect(socket_path)
@@ -682,7 +797,9 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
         emit_snapshot(feed, 1, 4, snapshot(
             5, "0123456789abcdef0123456789abcdef", "complete", "needs_attention", 200
         ))
-        second = expect_delivery(observer, local_a, "needs_attention@200")
+        second_envelope, second = expect_delivery(observer, local_a, "needs_attention@200")
+        require(second_envelope.get("as") == "knock",
+                "empty subscription did not receive the superseding post as a knock")
         require("body" not in second, "superseding message unexpectedly contains a body")
         expect_lifecycle(observer, local_a, "needs_attention@100", "superseded")
         report["checks"].append("AB-4 posts a new episode before superseding its prior episode")
@@ -701,46 +818,91 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
         emit_snapshot(feed, 2, 1, snapshot(
             1, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 300
         ))
-        new_instance = expect_delivery(observer, local_b, "needs_attention@300")
+        new_instance_envelope, new_instance = expect_delivery(
+            observer, local_b, "needs_attention@300"
+        )
         require("body" not in new_instance, "instance-change message unexpectedly contains a body")
-        require(new_instance.get("as") == "knock", "empty subscription did not receive the new local post as a knock")
+        require(new_instance_envelope.get("as") == "knock",
+                "empty subscription did not receive the new local post as a knock")
         expect_lifecycle(observer, local_a, "needs_attention@200", "cleared")
         entries = snapshot_entries(observer)
         require(len(find_message(entries, local_b, "needs_attention@300")) == 1,
                 "new Agentd instance message was not left open")
         require(len(find_message(entries, foreign_sender, foreign_id)) == 1,
                 "instance reconciliation changed a foreign sender message")
+        wait_stream(feed, 3)
         report["checks"].append("AB-5 Agentd instance change posts the new identity and clears the old one")
 
-        observer.close()
-        observer = None
-        stop_child(children[0], timeout=8.0)
-        stop_stream(feed, 2)
-        wait_stream(feed, 3)
-        require(bridge.poll() is None, "bridge exited while retrying a missing local daemon")
+        # Stop only the attention daemon. Do not inject a watch EOF: the bridge
+        # must observe the daemon's disconnect while the controlled watch stream
+        # remains available, then reconnect after the daemon returns.
         feed_current(feed, snapshot(
             1, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 300
         ))
+        observer.close()
+        observer = None
+        bridge_entry = child_entry(bridge)
+        first_outage_log_offset = log_offset(bridge_entry)
+        first_outage_started = time.monotonic()
+        daemon_stop = stop_child(child_entry(daemon), timeout=8.0)
+        require(daemon_stop["processGroupStopped"] and not daemon_stop["errors"],
+                f"test attention daemon did not stop cleanly: {daemon_stop}")
+        first_disconnect_seen = wait_log_contains(
+            bridge_entry, "attention daemon disconnected; retrying", first_outage_log_offset
+        )
+        wait_stream(feed, 4)
+        require(not (feed / "stream-3" / "stop").exists(),
+                "fixture injected a watch stop during the daemon-only outage")
+        first_socket_retry_seen = wait_log_contains(
+            bridge_entry, "local attention socket unavailable at", first_outage_log_offset
+        )
+        report["daemonOutages"] = [{
+            "disconnectObservedSecondsAfterStop": round(
+                first_disconnect_seen - first_outage_started, 3
+            ),
+            "socketUnavailableRetryObservedSecondsAfterStop": round(
+                first_socket_retry_seen - first_outage_started, 3
+            ),
+            "watchStopInjected": False,
+        }]
+
         daemon = launch("attentiond", [str(copied["attentiond"])])
-        wait_socket(socket_path, daemon)
-        observer = FrameConnection.connect(socket_path)
-        entries = snapshot_entries(observer)
+        first_socket_ready = wait_socket(socket_path, daemon)
+        first_reconnect_deadline = first_socket_ready + 5.8
+        observer = FrameConnection.connect(
+            socket_path, timeout=max(0.0, first_reconnect_deadline - time.monotonic())
+        )
+        entries = snapshot_entries(
+            observer, timeout=max(0.0, first_reconnect_deadline - time.monotonic())
+        )
         check_persistence(entries, local_b, "needs_attention@300", foreign_sender, foreign_id)
         report["checks"].append("AD-11 daemon restart preserves the open local and foreign messages")
 
-        reconnect_started = time.monotonic()
-        emit_snapshot(feed, 3, 1, snapshot(
+        emit_snapshot(feed, 4, 1, snapshot(
             2, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 400
-        ))
-        fourth = expect_delivery(observer, local_b, "needs_attention@400", timeout=5.8)
-        reconnect_seconds = time.monotonic() - reconnect_started
-        require(reconnect_seconds <= 5.8,
-                f"bridge did not resume local posting within the AB-5 retry bound: {reconnect_seconds:.3f}s")
-        report["daemonReconnectSeconds"] = round(reconnect_seconds, 3)
+        ), timeout=max(0.0, first_reconnect_deadline - time.monotonic()))
+        fourth_envelope, fourth = expect_delivery(
+            observer, local_b, "needs_attention@400",
+            timeout=max(0.0, first_reconnect_deadline - time.monotonic()),
+        )
+        first_reconnect_seconds = time.monotonic() - first_socket_ready
+        require(first_reconnect_seconds <= 5.8,
+                "bridge did not resume local posts within the observed five-second backoff cap "
+                f"plus fixture tolerance: {first_reconnect_seconds:.3f}s")
+        require(fourth_envelope.get("as") == "knock",
+                "empty subscription did not receive the reconnected post as a knock")
         require("body" not in fourth, "reconnected message unexpectedly contains a body")
         expect_lifecycle(observer, local_b, "needs_attention@300", "superseded")
-        report["checks"].append("AB-5 daemon reconnect resumes within the capped retry interval")
-        emit_snapshot(feed, 3, 2, snapshot(
+        report["daemonReconnects"] = [{
+            "elapsedFromSocketReadySeconds": round(first_reconnect_seconds, 3),
+            "messageId": "needs_attention@400",
+            "watchStream": 4,
+        }]
+        report["checks"].append(
+            "AB-5 daemon-only loss is observed, retried while Agentd input remains unstopped, "
+            "and local posting resumes within the capped backoff tolerance"
+        )
+        emit_snapshot(feed, 4, 2, snapshot(
             3, "fedcba9876543210fedcba9876543210", "complete", "active", 401
         ))
         expect_lifecycle(observer, local_b, "needs_attention@400", "cleared")
@@ -752,26 +914,177 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
         require(len(find_message(final_entries, foreign_sender, foreign_id)) == 1,
                 "local reconciliation changed a foreign-host message")
         report["checks"].append("AB-3/5 reconnect supersession, clear, and other-host isolation")
+
+        # Answer a bridge-owned episode through the daemon, then restart the
+        # daemon while the controlled Agentd input remains available. The
+        # answered id must remain closed and a duplicate post must not redeliver.
+        emit_snapshot(feed, 4, 3, snapshot(
+            4, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 500
+        ))
+        answered_envelope, answered = expect_delivery(
+            observer, local_b, "needs_attention@500"
+        )
+        require(answered_envelope.get("as") == "knock" and "body" not in answered,
+                "answered episode delivery did not preserve knock/body privacy")
+        answerer = FrameConnection.connect(socket_path)
+        answer_reply = answerer.request({
+            "v": 1,
+            "type": "answer",
+            "sender_id": local_b,
+            "message_id": "needs_attention@500",
+            "answer": None,
+        })
+        answerer.close()
+        require(answer_reply.get("type") == "ok",
+                f"answer was not acknowledged: {answer_reply}")
+        answered_lifecycle = expect_lifecycle(
+            observer, local_b, "needs_attention@500", "answered"
+        )
+        require(answered_lifecycle.get("by") == "answer",
+                f"daemon did not identify the answer lifecycle cause: {answered_lifecycle}")
+        report["checks"].append("answered bridge episode receives an acknowledged answer lifecycle")
+
+        feed_current(feed, snapshot(
+            4, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 500
+        ))
+        observer.close()
+        observer = None
+        second_outage_log_offset = log_offset(bridge_entry)
+        second_outage_started = time.monotonic()
+        daemon_stop = stop_child(child_entry(daemon), timeout=8.0)
+        require(daemon_stop["processGroupStopped"] and not daemon_stop["errors"],
+                f"test attention daemon did not stop cleanly: {daemon_stop}")
+        second_disconnect_seen = wait_log_contains(
+            bridge_entry, "attention daemon disconnected; retrying", second_outage_log_offset
+        )
+        wait_stream(feed, 5)
+        require(not (feed / "stream-4" / "stop").exists(),
+                "fixture injected a watch stop during the answered-state daemon outage")
+        second_socket_retry_seen = wait_log_contains(
+            bridge_entry, "local attention socket unavailable at", second_outage_log_offset
+        )
+        report["daemonOutages"].append({
+            "disconnectObservedSecondsAfterStop": round(
+                second_disconnect_seen - second_outage_started, 3
+            ),
+            "socketUnavailableRetryObservedSecondsAfterStop": round(
+                second_socket_retry_seen - second_outage_started, 3
+            ),
+            "watchStopInjected": False,
+        })
+
+        daemon = launch("attentiond", [str(copied["attentiond"])])
+        second_socket_ready = wait_socket(socket_path, daemon)
+        second_reconnect_deadline = second_socket_ready + 5.8
+        observer = FrameConnection.connect(
+            socket_path, timeout=max(0.0, second_reconnect_deadline - time.monotonic())
+        )
+        entries = snapshot_entries(
+            observer, timeout=max(0.0, second_reconnect_deadline - time.monotonic())
+        )
+        require(find_message(entries, local_b, "needs_attention@500") == [],
+                "answered message reopened after the actual daemon restart")
+        require(len(find_message(entries, foreign_sender, foreign_id)) == 1 and len(entries) == 1,
+                f"answered restart changed unrelated open messages: {entries}")
+        report["checks"].append("answered episode stays closed in the daemon snapshot after restart")
+
+        duplicate_poster = FrameConnection.connect(socket_path)
+        answered_duplicate = duplicate_poster.request(
+            create_message(local_b, "needs_attention@500")
+        )
+        duplicate_poster.close()
+        require(answered_duplicate.get("duplicate") is True,
+                f"answered episode duplicate was not acknowledged as closed: {answered_duplicate}")
+        expect_no_frame(observer, 0.2, "answered duplicate must not be delivered again")
+        closed_answerer = FrameConnection.connect(socket_path)
+        closed_answer = closed_answerer.request({
+            "v": 1,
+            "type": "answer",
+            "sender_id": local_b,
+            "message_id": "needs_attention@500",
+            "answer": None,
+        }, allow_error=True)
+        closed_answerer.close()
+        require(closed_answer.get("type") == "error" and closed_answer.get("reason") == "closed",
+                f"answered id did not remain closed to another answer: {closed_answer}")
+        expect_no_frame(observer, 0.2, "closed answer must not create another delivery")
+        report["checks"].append(
+            "AD-6 answered duplicate is acknowledged without redelivery and remains closed"
+        )
+
+        emit_snapshot(feed, 5, 1, snapshot(
+            5, "fedcba9876543210fedcba9876543210", "complete", "needs_attention", 600
+        ), timeout=max(0.0, second_reconnect_deadline - time.monotonic()))
+        reconnected_envelope, reconnected = expect_delivery(
+            observer, local_b, "needs_attention@600",
+            timeout=max(0.0, second_reconnect_deadline - time.monotonic()),
+        )
+        second_reconnect_seconds = time.monotonic() - second_socket_ready
+        require(second_reconnect_seconds <= 5.8,
+                "bridge did not resume local posts after answered-state restart within the "
+                f"capped backoff tolerance: {second_reconnect_seconds:.3f}s")
+        require(reconnected_envelope.get("as") == "knock" and "body" not in reconnected,
+                "post-restart delivery did not preserve knock/body privacy")
+        emit_snapshot(feed, 5, 2, snapshot(
+            6, "fedcba9876543210fedcba9876543210", "complete", "active", 601
+        ))
+        expect_lifecycle(observer, local_b, "needs_attention@600", "cleared")
+        final_entries = snapshot_entries(observer)
+        require(find_message(final_entries, local_b, "needs_attention@500") == [],
+                "answered episode reopened after subsequent complete scans")
+        require(find_message(final_entries, local_b, "needs_attention@600") == [],
+                "cleared post-restart episode remained open")
+        require(len(find_message(final_entries, foreign_sender, foreign_id)) == 1,
+                "local reconciliation changed a foreign-host message")
+        report["daemonReconnects"].append({
+            "elapsedFromSocketReadySeconds": round(second_reconnect_seconds, 3),
+            "messageId": "needs_attention@600",
+            "watchStream": 5,
+        })
+        report["checks"].append(
+            "AB-3/5 post-restart clear and foreign-message isolation remain intact"
+        )
         report["status"] = "passed"
+    except RunnerInterrupted as error:
+        report["status"] = "interrupted"
+        report["interruptedSignal"] = error.signum
+        report["error"] = str(error)
     except Exception as error:
         report["status"] = "failed"
         report["error"] = f"{type(error).__name__}: {error}"
     finally:
+        cleanup_errors: list[str] = []
         if observer is not None:
-            observer.close()
+            try:
+                observer.close()
+            except OSError as error:
+                cleanup_errors.append(f"close observer: {error}")
         for entry in reversed(children):
-            status = stop_child(entry)
-            report["cleanup"].append({"name": entry["name"], "pid": entry["process"].pid,
-                                      "exitCode": status,
-                                      "processGroupStopped": wait_process_group_stopped(
-                                          entry["process"].pid
-                                      )})
-            entry["log"].close()
-        report["cleanupOk"] = all(
-            item["exitCode"] is not None and item["processGroupStopped"]
-            for item in report["cleanup"]
+            result = entry.get("cleanupResult")
+            if result is None or not result.get("processGroupStopped"):
+                try:
+                    result = stop_child(entry)
+                except Exception as error:
+                    result = {"exitCode": entry["process"].poll(),
+                              "processGroupStopped": False,
+                              "errors": [f"cleanup raised {type(error).__name__}: {error}"]}
+            try:
+                entry["log"].close()
+            except OSError as error:
+                cleanup_errors.append(f"close {entry['name']} log: {error}")
+            report["cleanup"].append({
+                "name": entry["name"],
+                "pid": entry["process"].pid,
+                **result,
+            })
+        report["cleanupOk"] = (
+            not cleanup_errors
+            and all(item["processGroupStopped"] and not item["errors"]
+                    for item in report["cleanup"])
         )
-        if report["cleanupOk"]:
+        if cleanup_errors:
+            report["cleanupErrors"] = cleanup_errors
+        if scratch is not None and report["cleanupOk"]:
             try:
                 shutil.rmtree(scratch)
                 report["runtime"]["scratchRemoved"] = not scratch.exists()
@@ -779,9 +1092,12 @@ def run_pair(args: argparse.Namespace, identities: dict) -> dict:
                 report["cleanupOk"] = False
                 report["cleanupError"] = str(error)
                 report["runtime"]["scratchPreserved"] = str(scratch)
-        else:
+        elif scratch is not None:
             report["runtime"]["scratchPreserved"] = str(scratch)
-        if not report["cleanupOk"] or not report["runtime"].get("scratchRemoved", False):
+        if (
+            not report["cleanupOk"]
+            or (scratch is not None and not report["runtime"].get("scratchRemoved", False))
+        ):
             report["status"] = "failed"
             report.setdefault("error", "test-owned processes or scratch did not clean up")
         write_json_atomic(args.evidence_dir / "result.json", report)
@@ -813,20 +1129,50 @@ def main() -> int:
     ensure_private_directory(args.scratch_parent, "scratch parent")
     args.evidence_dir.mkdir(mode=0o700, parents=False)
     ensure_private_directory(args.evidence_dir, "evidence directory")
+
+    def handle_interrupt(signum: int, _frame: Any) -> None:
+        # A second ordinary stop request must not interrupt owned-process cleanup.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        raise RunnerInterrupted(signum)
+
+    previous_handlers = {
+        signal.SIGTERM: signal.signal(signal.SIGTERM, handle_interrupt),
+        signal.SIGINT: signal.signal(signal.SIGINT, handle_interrupt),
+    }
     try:
-        _manifest, identities = read_manifest(args.manifest, args.inputs_dir)
-        report = run_pair(args, identities)
-    except Exception as error:
-        report = {
-            "schema": SCHEMA,
-            "status": "failed",
-            "error": f"{type(error).__name__}: {error}",
-            "limits": ["No product failure is inferred from a setup or harness failure."],
-        }
-        if args.manifest.is_file() and not args.manifest.is_symlink():
-            report["manifestSha256"] = sha256_file(args.manifest.resolve())
-        write_json_atomic(args.evidence_dir / "result.json", report)
+        try:
+            _manifest, identities, manifest_sha256 = read_manifest(
+                args.manifest, args.inputs_dir
+            )
+            report = run_pair(args, identities, manifest_sha256)
+        except RunnerInterrupted as error:
+            report = {
+                "schema": SCHEMA,
+                "status": "interrupted",
+                "interruptedSignal": error.signum,
+                "error": str(error),
+                "limits": ["No product failure is inferred from an interrupted runner."],
+            }
+            if args.manifest.is_file() and not args.manifest.is_symlink():
+                report["manifestSha256"] = sha256_file(args.manifest.resolve())
+            write_json_atomic(args.evidence_dir / "result.json", report)
+        except Exception as error:
+            report = {
+                "schema": SCHEMA,
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+                "limits": ["No product failure is inferred from a setup or harness failure."],
+            }
+            if args.manifest.is_file() and not args.manifest.is_symlink():
+                report["manifestSha256"] = sha256_file(args.manifest.resolve())
+            write_json_atomic(args.evidence_dir / "result.json", report)
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     print(json.dumps(report, sort_keys=True))
+    if report.get("status") == "interrupted":
+        return 128 + int(report.get("interruptedSignal", 0))
     return 0 if report.get("status") == "passed" else 1
 
 

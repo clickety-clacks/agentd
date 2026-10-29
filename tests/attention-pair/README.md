@@ -46,16 +46,26 @@ remain within that per-run tree. It records both source and build identities,
 runtime compatibility, invocation, process commands, checks, reconnect timing,
 process exit codes, and limits in `result.json`, and retains process logs in
 the evidence directory. Cleanup only signals process groups started by this
-runner and removes its own scratch directory after all owned processes stop.
+runner and removes its own scratch directory only after every owned process
+group has stopped. SIGTERM or SIGINT unwinds through the same cleanup path; if
+the runner leader has exited but a process in its group remains, cleanup still
+signals that group. Cleanup attempts every owned group and retains scratch when
+stopping a group fails.
 
 The controlled stream covers the initial incomplete scan, post identity and
 privacy, duplicate acknowledgment without redelivery, incomplete/unknown no-op
 behavior, episode supersession, Agentd watch loss and recovery, instance
-replacement, daemon restart and persisted state, reconnect supersession within
-the five-second retry cap plus an 800 ms observation tolerance, clearing, and
-preservation of another machine's open message. A focused unit test checks the
-retry sequence and exact cap. The fixture uses no prompt, pane, terminal output,
-or transcript data.
+replacement, and clearing. It separately stops the attention daemon while
+leaving the controlled Agentd input unstopped, observes the bridge's disconnect
+and retry logs, then checks persisted open state and a new local post after the
+private socket returns. It answers a bridge episode, restarts the actual daemon,
+checks that the answered id remains closed, verifies duplicate acknowledgment
+without redelivery, and checks a subsequent local post and clear. The report
+measures delivery time from observed socket readiness against the five-second
+backoff cap plus an 800 ms fixture tolerance; it does not assert a fixed retry
+schedule. A focused unit test checks that retry delays are nonzero, grow, and
+stay within the cap. The fixture uses no prompt, pane, terminal output, or
+transcript data.
 The Agentd watch stream is controlled rather than produced by a running Agentd
 daemon; the bridge executable and attention daemon are the exact binaries named
 in the manifest. The result does not prove fresh-login or reboot behavior,
