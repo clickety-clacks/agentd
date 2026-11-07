@@ -6,7 +6,7 @@ running Claude Code and Codex agents. It discovers their processes through
 or has unknown activity. Activity comes from optional hooks, never from CPU
 usage or elapsed time.
 
-The source tree targets v0.3.4. The installation example below pins v0.3.3;
+The source tree targets v0.3.5. The installation example below pins v0.3.5;
 choose a version that is available from [GitHub Releases](https://github.com/clickety-clacks/agentd/releases).
 
 Use `agentd list` for a snapshot or `agentd watch --json` to subscribe to changes.
@@ -69,10 +69,9 @@ The systemd user manager supplies `XDG_RUNTIME_DIR`. Agentd creates
 ### Existing manual installs and distribution packages
 
 A hand-installed Agentd release at version 0.3.2 or later is supported with the
-v0.3.4 attention bridge when it uses the released `agentd.service` unit. The
-daemon, CLI, and watch stream are unchanged from v0.3.2 through v0.3.4. The
-bridge unit searches `~/.local/bin` before `/usr/bin`, so its `agentd watch
---json` client matches the local daemon.
+v0.3.5 attention bridge when it uses the released `agentd.service` unit. The
+bridge uses Agentd's compatible local JSON watch protocol, and its unit searches
+`~/.local/bin` before `/usr/bin` so the client finds the local daemon.
 
 Systemd searches the user configuration directory before vendor unit directories.
 When both exist, `~/.config/systemd/user/agentd.service` (or
@@ -479,7 +478,7 @@ matching version, invocation notes, or service template are unavailable, the
 packager warns and creates a core archive without the bridge.
 
 The package command writes
-`target/release-assets/agentd-0.3.4-<rust-host>.tar.gz` and
+`target/release-assets/agentd-0.3.5-<rust-host>.tar.gz` and
 `target/release-assets/SHA256SUMS`. Every archive contains `agentd`, this README,
 the base systemd user unit, and `skills/agentd/SKILL.md`. When the optional
 bridge binary and its matching invocation notes and service template are
@@ -487,7 +486,7 @@ available, the archive also contains those files. Standard Agentd installation
 installs only the base daemon; downstream installers choose whether to install
 and enable the bridge.
 
-Packaging creates local v0.3.4 candidate files only. It does not publish a
+Packaging creates local v0.3.5 candidate files only. It does not publish a
 release, install Agentd, install the operator skill, or change an earlier
 release.
 
