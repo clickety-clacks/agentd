@@ -1065,7 +1065,7 @@ mod tests {
 
         fn read_status(&self, pid: u32) -> io::Result<String> {
             assert_eq!(pid, 61);
-            Ok("Uid:\t1000\t1000\t1000\t1000\n".into())
+            Ok("Uid:\t4242\t4242\t4242\t4242\n".into())
         }
 
         fn read_cwd(&self, _pid: u32) -> io::Result<PathBuf> {
@@ -1087,7 +1087,7 @@ mod tests {
 
         fn read_status(&self, pid: u32) -> io::Result<String> {
             assert_eq!(pid, 60);
-            Ok("Uid:\t1000\t1000\t1000\t1000\n".into())
+            Ok("Uid:\t4242\t4242\t4242\t4242\n".into())
         }
 
         fn read_cwd(&self, _pid: u32) -> io::Result<PathBuf> {
