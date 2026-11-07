@@ -30,13 +30,13 @@ and HTTP endpoints. Agentd works independently of hub.
 ### Install a release
 
 Download a tagged build from [GitHub Releases](https://github.com/clickety-clacks/agentd/releases).
-This example installs v0.3.3. Run the steps in one shell session.
+This example installs v0.3.5. Run the steps in one shell session.
 
 1. Download the archive and checksum file:
 
    ```sh
    cd "$(mktemp -d)"
-   ver=0.3.3
+   ver=0.3.5
    archive="agentd-${ver}-x86_64-unknown-linux-gnu"
    base="https://github.com/clickety-clacks/agentd/releases/download/v${ver}"
    curl -fsSLO "${base}/${archive}.tar.gz"
