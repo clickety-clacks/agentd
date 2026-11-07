@@ -355,9 +355,9 @@ fn systemd_unit_has_fixed_user_lifecycle_contract() {
 }
 
 #[test]
-fn captured_real_procfs_fixtures_replay_parser_fields() {
+fn sanitized_procfs_fixture_replays_parser_fields() {
     let fixture: ProcFixture =
-        serde_json::from_str(include_str!("fixtures/real-procfs-2026-08-24.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/sanitized-procfs.json")).unwrap();
     assert_eq!(fixture.processes.len(), 4);
     for process in fixture.processes {
         let stat = agentd::procfs::parse_stat(&process.stat, process.pid).unwrap();
