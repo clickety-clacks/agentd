@@ -10,16 +10,20 @@ license=('MIT')
 _release_dir="${pkgbase}-${pkgver}-x86_64-unknown-linux-gnu"
 _readme_commit='247d5adf7d86b4b50cb01213cdcf3292325f802f'
 _readme_source="agentd-README-${_readme_commit}.md"
+_license_commit='38166ccebe2ee25b4cdded0be79150c2fd1f2cc2'
+_license_source="agentd-LICENSE-${_license_commit}.txt"
 
 source=(
   "${_release_dir}.tar.gz::${url}/releases/download/v${pkgver}/${_release_dir}.tar.gz"
   "${_readme_source}::https://raw.githubusercontent.com/clickety-clacks/agentd/${_readme_commit}/README.md"
+  "${_license_source}::https://raw.githubusercontent.com/clickety-clacks/agentd/${_license_commit}/LICENSE"
   'agentd.service'
   'agentd-attention.service'
 )
 sha256sums=(
   'd62b47d23fa7d5bc71bbe69c1364f01b14bd12d6d189b5303ae8395638adbd0b'
   '5b0906f0a0929964276a2d2955025ab18fde7dc094f96c3887f4556af22f1eed'
+  'b1ed28e369c287a7b3dd0c94ba46a5c9a090c8164c32244f5cc63c4d0fa3631d'
   '4b021e482ba503d94630da8a4874898204e1d0f62224ad81588f7cd1371e80d2'
   'f05b90f7d0f9b6231a32730c6809d6ecc08d7a3c1cde0a6039230666a084c3ad'
 )
@@ -33,7 +37,7 @@ package_agentd() {
     "$pkgdir/usr/lib/systemd/user/agentd.service"
   install -Dm644 "$srcdir/$_readme_source" \
     "$pkgdir/usr/share/doc/agentd/README.md"
-  install -Dm644 /usr/share/licenses/common/MIT \
+  install -Dm644 "$srcdir/$_license_source" \
     "$pkgdir/usr/share/licenses/agentd/LICENSE"
 }
 
@@ -47,6 +51,6 @@ package_agentd-attention() {
     "$pkgdir/usr/share/doc/agentd-attention/agentd-attention.md"
   install -Dm644 "$srcdir/agentd-attention.service" \
     "$pkgdir/usr/lib/systemd/user/agentd-attention.service"
-  install -Dm644 /usr/share/licenses/common/MIT \
+  install -Dm644 "$srcdir/$_license_source" \
     "$pkgdir/usr/share/licenses/agentd-attention/LICENSE"
 }
