@@ -489,7 +489,7 @@ mod tests {
                 harness: Harness::Codex,
                 detected_by: DetectedBy::ProcComm,
                 presence: Presence::present(),
-                cwd: Cwd::known("/home/mike/work/agentd".into()),
+                cwd: Cwd::known("/home/example-user/work/agentd".into()),
                 activity: Activity::unknown(),
                 tty: Some("pts/13".into()),
                 tmux: Some(TmuxLocation {
@@ -504,7 +504,7 @@ mod tests {
         };
         assert_eq!(
             human_snapshot(&snapshot),
-            "instance=0123456789abcdef0123456789abcdef revision=1 scan=complete agents=1\nagent name=\"Agentd spec\" tmux=\"agents:2.spec:%7\" cwdBase=\"agentd\" pid=7 startTimeTicks=9 startedAtUnixMs=1700000002500 tty=\"pts/13\" harness=codex presence=present cwd=/home/mike/work/agentd activity=unknown\n"
+            "instance=0123456789abcdef0123456789abcdef revision=1 scan=complete agents=1\nagent name=\"Agentd spec\" tmux=\"agents:2.spec:%7\" cwdBase=\"agentd\" pid=7 startTimeTicks=9 startedAtUnixMs=1700000002500 tty=\"pts/13\" harness=codex presence=present cwd=/home/example-user/work/agentd activity=unknown\n"
         );
     }
 }

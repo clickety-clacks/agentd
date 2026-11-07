@@ -1,0 +1,46 @@
+{
+  "capturedAt": "2026-08-24",
+  "source": "Sanitized Linux procfs sample with three Codex processes and one Claude process; process IDs, user IDs, and home paths are synthetic; no command-line or environment bytes captured",
+  "processes": [
+    {
+      "pid": 42001,
+      "stat": "42001 (codex) S 41999 42000 42000 0 -1 0 1 0 0 0 100 0 0 0 20 0 1 0 10101 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+      "statusUid": "Uid:\t4242\t4242\t4242\t4242\n",
+      "cwd": "/home/example-user",
+      "harness": "codex",
+      "parentPid": 41999,
+      "startTimeTicks": 10101,
+      "effectiveUid": 4242
+    },
+    {
+      "pid": 42002,
+      "stat": "42002 (codex) S 42001 42000 42000 0 -1 0 1 0 0 0 200 0 0 0 20 0 1 0 20202 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+      "statusUid": "Uid:\t4242\t4242\t4242\t4242\n",
+      "cwd": "/home/example-user",
+      "harness": "codex",
+      "parentPid": 42001,
+      "startTimeTicks": 20202,
+      "effectiveUid": 4242
+    },
+    {
+      "pid": 42003,
+      "stat": "42003 (codex) S 42001 42000 42000 0 -1 0 1 0 0 0 300 0 0 0 20 0 1 0 30303 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+      "statusUid": "Uid:\t4242\t4242\t4242\t4242\n",
+      "cwd": "/home/example-user",
+      "harness": "codex",
+      "parentPid": 42001,
+      "startTimeTicks": 30303,
+      "effectiveUid": 4242
+    },
+    {
+      "pid": 42004,
+      "stat": "42004 (claude.exe) S 1 42004 42004 0 -1 0 1 0 0 0 400 0 0 0 20 0 1 0 40404 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+      "statusUid": "Uid:\t4242\t4242\t4242\t4242\n",
+      "cwd": "/home/example-user/src",
+      "harness": "claude",
+      "parentPid": 1,
+      "startTimeTicks": 40404,
+      "effectiveUid": 4242
+    }
+  ]
+}

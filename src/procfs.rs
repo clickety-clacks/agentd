@@ -637,7 +637,7 @@ mod tests {
         }
 
         fn scanner(&self) -> ProcfsScanner {
-            ProcfsScanner::new(self.0.clone(), 1000)
+            ProcfsScanner::new(self.0.clone(), 4242)
         }
 
         fn write_process(
@@ -736,8 +736,8 @@ mod tests {
         }
 
         let procfs = TestProcfs::new("tmux-index");
-        procfs.write_process_with_tty(10, "codex", 0, 100, 1000, 34_829);
-        procfs.write_process(20, "claude", 0, 200, 1000);
+        procfs.write_process_with_tty(10, "codex", 0, 100, 4242, 34_829);
+        procfs.write_process(20, "claude", 0, 200, 4242);
         let tmux = Arc::new(CountingTmux {
             calls: AtomicUsize::new(0),
         });
@@ -745,7 +745,7 @@ mod tests {
             Arc::new(FilesystemProcfs {
                 root: procfs.0.clone(),
             }),
-            1000,
+            4242,
             tmux.clone(),
         );
         let proposal = scanner.scan(None, &FixedClock(1));
@@ -771,7 +771,7 @@ mod tests {
         let view = Arc::new(TtyRaceView {
             reads: AtomicUsize::new(0),
         });
-        let proposal = ProcfsScanner::from_view(view, 1000).scan(None, &FixedClock(1));
+        let proposal = ProcfsScanner::from_view(view, 4242).scan(None, &FixedClock(1));
         assert_eq!(proposal.agents.len(), 1);
         assert_eq!(proposal.agents[0].presence.state, PresenceState::Present);
         assert_eq!(proposal.agents[0].tty, None);
@@ -780,8 +780,8 @@ mod tests {
 
     #[test]
     fn effective_uid_is_second_value() {
-        let status = "Name:\tcodex\nUid:\t1000\t1001\t1002\t1003\n";
-        assert_eq!(parse_effective_uid(status).unwrap(), 1001);
+        let status = "Name:\tcodex\nUid:\t4242\t4243\t4244\t4245\n";
+        assert_eq!(parse_effective_uid(status).unwrap(), 4243);
     }
 
     #[test]
@@ -793,12 +793,12 @@ mod tests {
     #[test]
     fn scanner_emits_roots_collapses_helpers_and_excludes_foreign_uid() {
         let procfs = TestProcfs::new("roots");
-        procfs.write_process(10, "codex", 0, 100, 1000);
-        procfs.write_process(11, "codex", 10, 110, 1000);
+        procfs.write_process(10, "codex", 0, 100, 4242);
+        procfs.write_process(11, "codex", 10, 110, 4242);
         procfs.write_process(12, "codex", 0, 120, 2000);
-        procfs.write_process(13, "claude.exe", 0, 130, 1000);
+        procfs.write_process(13, "claude.exe", 0, 130, 4242);
         procfs.write_process(14, "codex", 0, 140, 2000);
-        procfs.write_process(15, "codex", 14, 150, 1000);
+        procfs.write_process(15, "codex", 14, 150, 4242);
         let proposal = procfs.scanner().scan(None, &FixedClock(1));
         assert_eq!(proposal.scan.state, ScanState::Complete);
         assert_eq!(
@@ -814,10 +814,10 @@ mod tests {
     #[test]
     fn hook_resolver_maps_nested_same_harness_to_highest_root() {
         let procfs = TestProcfs::new("hook-root");
-        procfs.write_process(410, "claude", 0, 4_100, 1000);
-        procfs.write_process(420, "bash", 410, 4_200, 1000);
-        procfs.write_process(430, "claude", 420, 4_300, 1000);
-        procfs.write_process(440, "bash", 430, 4_400, 1000);
+        procfs.write_process(410, "claude", 0, 4_100, 4242);
+        procfs.write_process(420, "bash", 410, 4_200, 4242);
+        procfs.write_process(430, "claude", 420, 4_300, 4242);
+        procfs.write_process(440, "bash", 430, 4_400, 4242);
         assert_eq!(
             procfs.scanner().resolve_hook_root(440, Harness::Claude),
             Ok(AgentId {
@@ -830,10 +830,10 @@ mod tests {
     #[test]
     fn hook_resolver_crosses_different_harness_candidates() {
         let procfs = TestProcfs::new("hook-cross-harness");
-        procfs.write_process(510, "codex", 0, 5_100, 1000);
-        procfs.write_process(520, "claude", 510, 5_200, 1000);
-        procfs.write_process(530, "codex", 520, 5_300, 1000);
-        procfs.write_process(540, "bash", 530, 5_400, 1000);
+        procfs.write_process(510, "codex", 0, 5_100, 4242);
+        procfs.write_process(520, "claude", 510, 5_200, 4242);
+        procfs.write_process(530, "codex", 520, 5_300, 4242);
+        procfs.write_process(540, "bash", 530, 5_400, 4242);
         assert_eq!(
             procfs.scanner().resolve_hook_root(540, Harness::Codex),
             Ok(AgentId {
@@ -853,8 +853,8 @@ mod tests {
     #[test]
     fn root_promotion_discards_activity_before_child_returns() {
         let procfs = TestProcfs::new("promotion");
-        procfs.write_process(20, "bash", 0, 200, 1000);
-        procfs.write_process(21, "codex", 20, 210, 1000);
+        procfs.write_process(20, "bash", 0, 200, 4242);
+        procfs.write_process(21, "codex", 20, 210, 4242);
         let scanner = procfs.scanner();
         let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
         store.commit_scan(scanner.scan(None, &FixedClock(1)));
@@ -869,14 +869,14 @@ mod tests {
             )
             .unwrap();
 
-        procfs.write_process(20, "codex", 0, 200, 1000);
+        procfs.write_process(20, "codex", 0, 200, 4242);
         let promoted = scanner.scan(store.current_snapshot().as_deref(), &FixedClock(3));
         let promoted = store.commit_scan(promoted);
         assert_eq!(promoted.agents.len(), 1);
         assert_eq!(promoted.agents[0].id.pid, 20);
         assert_eq!(promoted.agents[0].activity.state, ActivityState::Unknown);
 
-        procfs.write_process(20, "bash", 0, 200, 1000);
+        procfs.write_process(20, "bash", 0, 200, 4242);
         let returned = scanner.scan(store.current_snapshot().as_deref(), &FixedClock(4));
         let returned = store.commit_scan(returned);
         assert_eq!(returned.agents.len(), 1);
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn malformed_retained_status_is_unknown_and_degraded() {
         let procfs = TestProcfs::new("unknown-status");
-        procfs.write_process(30, "codex", 0, 300, 1000);
+        procfs.write_process(30, "codex", 0, 300, 4242);
         let scanner = procfs.scanner();
         let first = scanner.scan(None, &FixedClock(1));
         let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
@@ -902,7 +902,7 @@ mod tests {
     #[test]
     fn cwd_failure_is_explicit_without_degrading_scan() {
         let procfs = TestProcfs::new("unknown-cwd");
-        procfs.write_process(40, "claude", 0, 400, 1000);
+        procfs.write_process(40, "claude", 0, 400, 4242);
         fs::remove_file(procfs.0.join("40/cwd")).unwrap();
         let proposal = procfs.scanner().scan(None, &FixedClock(1));
         assert_eq!(proposal.scan.state, ScanState::Complete);
@@ -914,7 +914,7 @@ mod tests {
     #[test]
     fn enumeration_failure_preserves_old_identity_as_unknown() {
         let procfs = TestProcfs::new("enumeration");
-        procfs.write_process(50, "codex", 0, 500, 1000);
+        procfs.write_process(50, "codex", 0, 500, 4242);
         let scanner = procfs.scanner();
         let first = scanner.scan(None, &FixedClock(1));
         fs::remove_dir_all(&procfs.0).unwrap();
@@ -943,13 +943,13 @@ mod tests {
     #[test]
     fn parent_cycle_never_invents_new_root_and_retains_old_as_unknown() {
         let procfs = TestProcfs::new("cycle");
-        procfs.write_process(100, "codex", 0, 1_000, 1000);
+        procfs.write_process(100, "codex", 0, 1_000, 4242);
         let scanner = procfs.scanner();
         let first = scanner.scan(None, &FixedClock(1));
         let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
         store.commit_scan(first);
-        procfs.write_process(100, "codex", 200, 1_000, 1000);
-        procfs.write_process(200, "bash", 100, 2_000, 1000);
+        procfs.write_process(100, "codex", 200, 1_000, 4242);
+        procfs.write_process(200, "bash", 100, 2_000, 4242);
         let cycled = scanner.scan(store.current_snapshot().as_deref(), &FixedClock(2));
         assert_eq!(cycled.agents.len(), 1);
         assert_eq!(cycled.agents[0].presence.state, PresenceState::Unknown);
@@ -965,7 +965,7 @@ mod tests {
         let view = Arc::new(ParentRaceView {
             reads: AtomicUsize::new(0),
         });
-        let scanner = ProcfsScanner::from_view(view.clone(), 1000);
+        let scanner = ProcfsScanner::from_view(view.clone(), 4242);
         let new_scan = scanner.scan(None, &FixedClock(1));
         assert!(new_scan.agents.is_empty());
         assert!(new_scan.scan.issues.iter().any(|issue| {
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn reused_pid_replaces_identity_and_drops_activity_in_one_commit() {
         let procfs = TestProcfs::new("pid-reuse");
-        procfs.write_process(70, "codex", 0, 700, 1000);
+        procfs.write_process(70, "codex", 0, 700, 4242);
         let scanner = procfs.scanner();
         let store = StateStore::with_instance_id("0123456789abcdef0123456789abcdef".into());
         store.commit_scan(scanner.scan(None, &FixedClock(1)));
@@ -1028,7 +1028,7 @@ mod tests {
                 &FixedClock(2),
             )
             .unwrap();
-        procfs.write_process(70, "codex", 0, 701, 1000);
+        procfs.write_process(70, "codex", 0, 701, 4242);
         let replacement = scanner.scan(store.current_snapshot().as_deref(), &FixedClock(3));
         let replacement = store.commit_scan(replacement);
         assert_eq!(replacement.agents.len(), 1);
