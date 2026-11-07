@@ -1,0 +1,52 @@
+pkgbase=agentd
+pkgname=('agentd' 'agentd-attention')
+pkgver=0.3.4
+pkgrel=1
+pkgdesc='Truthful local coding-agent registry and event stream'
+arch=('x86_64')
+url='https://github.com/clickety-clacks/agentd'
+license=('MIT')
+
+_release_dir="${pkgbase}-${pkgver}-x86_64-unknown-linux-gnu"
+_readme_commit='247d5adf7d86b4b50cb01213cdcf3292325f802f'
+_readme_source="agentd-README-${_readme_commit}.md"
+
+source=(
+  "${_release_dir}.tar.gz::${url}/releases/download/v${pkgver}/${_release_dir}.tar.gz"
+  "${_readme_source}::https://raw.githubusercontent.com/clickety-clacks/agentd/${_readme_commit}/README.md"
+  'agentd.service'
+  'agentd-attention.service'
+)
+sha256sums=(
+  'd62b47d23fa7d5bc71bbe69c1364f01b14bd12d6d189b5303ae8395638adbd0b'
+  '5b0906f0a0929964276a2d2955025ab18fde7dc094f96c3887f4556af22f1eed'
+  '4b021e482ba503d94630da8a4874898204e1d0f62224ad81588f7cd1371e80d2'
+  'f05b90f7d0f9b6231a32730c6809d6ecc08d7a3c1cde0a6039230666a084c3ad'
+)
+
+package_agentd() {
+  depends=('gcc-libs' 'glibc' 'systemd')
+  optdepends=('agentd-attention: optional local attention bridge')
+
+  install -Dm755 "$srcdir/$_release_dir/agentd" "$pkgdir/usr/bin/agentd"
+  install -Dm644 "$srcdir/agentd.service" \
+    "$pkgdir/usr/lib/systemd/user/agentd.service"
+  install -Dm644 "$srcdir/$_readme_source" \
+    "$pkgdir/usr/share/doc/agentd/README.md"
+  install -Dm644 /usr/share/licenses/common/MIT \
+    "$pkgdir/usr/share/licenses/agentd/LICENSE"
+}
+
+package_agentd-attention() {
+  pkgdesc='Optional local attention bridge for Agentd'
+  depends=("agentd=${pkgver}-${pkgrel}")
+
+  install -Dm755 "$srcdir/$_release_dir/agentd-attention" \
+    "$pkgdir/usr/bin/agentd-attention"
+  install -Dm644 "$srcdir/$_release_dir/docs/agentd-attention.md" \
+    "$pkgdir/usr/share/doc/agentd-attention/agentd-attention.md"
+  install -Dm644 "$srcdir/agentd-attention.service" \
+    "$pkgdir/usr/lib/systemd/user/agentd-attention.service"
+  install -Dm644 /usr/share/licenses/common/MIT \
+    "$pkgdir/usr/share/licenses/agentd-attention/LICENSE"
+}

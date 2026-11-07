@@ -66,6 +66,53 @@ Add `~/.local/bin` to your shell startup file's `PATH` for future sessions.
 The systemd user manager supplies `XDG_RUNTIME_DIR`. Agentd creates
 `$XDG_RUNTIME_DIR/agentd.sock` with mode `0600`.
 
+### Existing manual installs and distribution packages
+
+A hand-installed Agentd release at version 0.3.2 or later is supported with the
+v0.3.4 attention bridge when it uses the released `agentd.service` unit. The
+daemon, CLI, and watch stream are unchanged from v0.3.2 through v0.3.4. The
+bridge unit searches `~/.local/bin` before `/usr/bin`, so its `agentd watch
+--json` client matches the local daemon.
+
+Systemd searches the user configuration directory before vendor unit directories.
+When both exist, `~/.config/systemd/user/agentd.service` (or
+`$XDG_CONFIG_HOME/systemd/user/agentd.service`) takes precedence over
+`/usr/lib/systemd/user/agentd.service`. A distribution integration that enables
+the `agentd.service` and `agentd-attention.service` unit names therefore leaves
+an existing same-name user unit in control of `agentd.service`; it does not
+replace that unit or the binaries in `~/.local/bin`. The package does not
+create, change, or remove files under your home directory. The integration
+requests units by name and does not migrate or replace user-authored unit files
+or binaries. The Agentd daemon refuses to start if another listener already
+owns the same user-session socket, so a second start does not replace the
+existing daemon.
+
+Hand installs older than 0.3.2, or daemons started outside the released
+`agentd.service` unit, are unsupported with the packaged bridge. Upgrade them
+to 0.3.2 or later using the released unit, or stop and remove the old service
+before switching to the packaged daemon.
+
+To switch a hand install to the packaged daemon, make this a deliberate manual
+change. The package and distribution integration do not migrate or remove files
+under your home directory:
+
+1. Back up any user `agentd.service` and `agentd-attention.service` files and
+   the corresponding binaries in `~/.local/bin` outside their active paths.
+2. Stop and disable `agentd.service`; if an `agentd-attention.service` is
+   installed, stop and disable it too.
+3. Remove the user unit files from the systemd unit search path and the local
+   binaries from `~/.local/bin`. Keep the backups until the switch is verified.
+4. Install the distribution packages, then run `systemctl --user daemon-reload`.
+5. Enable and start `agentd.service`. If you want the optional bridge, enable
+   and start `agentd-attention.service` as well.
+
+To roll back, stop and disable the packaged units, restore the backed-up user
+unit files and binaries, reload the user manager, and start the original unit.
+Keep the packaged bridge optional; installing it does not enable it.
+
+For the systemd user-unit search order, see
+[systemd.unit](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html).
+
 ## Quick start
 
 Read the roster:
